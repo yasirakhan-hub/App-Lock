@@ -245,4 +245,13 @@ class AppLockManager private constructor(private val context: Context) {
 
         return packageName == launcherPkg
     }
+
+    /**
+     * Checks whether the given package is an Android Package Installer / Uninstaller component.
+     */
+    fun isPackageInstaller(packageName: String): Boolean {
+        return packageName == "com.google.android.packageinstaller" ||
+                packageName == "com.android.packageinstaller" ||
+                packageName == "com.samsung.android.packageinstaller"
+    }
 }

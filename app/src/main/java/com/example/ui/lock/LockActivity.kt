@@ -72,6 +72,7 @@ class LockActivity : FragmentActivity() {
         const val EXTRA_TARGET_PACKAGE = "extra_target_package"
         const val EXTRA_TARGET_CLASS = "extra_target_class"
         const val EXTRA_IS_TEST_MODE = "extra_is_test_mode"
+        const val EXTRA_ACTION_DEACTIVATE_ADMIN = "extra_action_deactivate_admin"
     }
 
     private lateinit var appLockManager: AppLockManager
@@ -87,12 +88,15 @@ class LockActivity : FragmentActivity() {
         val targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE) ?: ""
         val targetClass = intent.getStringExtra(EXTRA_TARGET_CLASS)
         val isTestMode = intent.getBooleanExtra(EXTRA_IS_TEST_MODE, false)
+        val isDeactivateAdmin = intent.getBooleanExtra(EXTRA_ACTION_DEACTIVATE_ADMIN, false)
 
-        if (!isTestMode && targetPackage.isNotBlank()) {
+        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank()) {
             appLockManager.storeInterceptedTarget(targetPackage, targetClass)
         }
 
-        val appName = if (targetPackage.isNotBlank()) {
+        val appName = if (isDeactivateAdmin) {
+            "Deactivate Device Administrator"
+        } else if (targetPackage.isNotBlank()) {
             appDiscoveryRepository.getAppName(targetPackage)
         } else {
             "Protected Application"

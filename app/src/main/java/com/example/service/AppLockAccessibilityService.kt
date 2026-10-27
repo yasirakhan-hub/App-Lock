@@ -46,8 +46,46 @@ class AppLockAccessibilityService : AccessibilityService() {
                 appLockManager = AppLockManager.getInstance(applicationContext)
             }
 
+            // Anti-Force Stop Protection:
+            // Intercept attempts to open Settings -> App Info for Secure AppLock
+            if (isAppInfoForSelf(pkgName, className, event.text)) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                return
+            }
+
+            // Anti-Uninstall Protection:
+            // Intercept Package Installer when attempting to uninstall Secure AppLock
+            if (appLockManager.isPackageInstaller(pkgName)) {
+                val appName = getString(com.example.R.string.app_name)
+                val isUninstallingSelf = event.text?.any { text ->
+                    text.contains(appName, ignoreCase = true) || text.contains(packageName, ignoreCase = true)
+                } ?: false
+
+                if (isUninstallingSelf) {
+                    appLockManager.launchLockScreen(pkgName, className)
+                    return
+                }
+            }
+
             appLockManager.onForegroundPackageChanged(pkgName, className)
         }
+    }
+
+    private fun isAppInfoForSelf(pkgName: String, className: String?, textList: List<CharSequence>?): Boolean {
+        if (pkgName == "com.android.settings") {
+            val isAppDetailsClass = className != null && (
+                    className.contains("InstalledAppDetails", ignoreCase = true) ||
+                    className.contains("AppDetails", ignoreCase = true) ||
+                    className.contains("ManageApplications", ignoreCase = true)
+            )
+            val appName = getString(com.example.R.string.app_name)
+            val matchesSelf = textList?.any { text ->
+                text.contains(appName, ignoreCase = true) || text.contains(packageName, ignoreCase = true)
+            } ?: false
+
+            return isAppDetailsClass && matchesSelf
+        }
+        return false
     }
 
     private fun isTransientUiElement(className: String?): Boolean {

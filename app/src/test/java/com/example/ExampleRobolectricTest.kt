@@ -190,4 +190,22 @@ class ExampleRobolectricTest {
         manager.invalidateLauncherCache()
         assertFalse("Arbitrary app package must still return false after cache invalidation", manager.isLauncherOrSystemUI("com.example.otherapp"))
     }
+
+    @Test
+    fun testPackageInstallerDetection() {
+        val manager = com.example.data.repository.AppLockManager.getInstance(context)
+        assertTrue(manager.isPackageInstaller("com.google.android.packageinstaller"))
+        assertTrue(manager.isPackageInstaller("com.android.packageinstaller"))
+        assertTrue(manager.isPackageInstaller("com.samsung.android.packageinstaller"))
+        assertFalse(manager.isPackageInstaller("com.example.otherapp"))
+    }
+
+    @Test
+    fun testDeviceAdminReceiverOnDisableRequested() {
+        val receiver = com.example.receiver.AppLockDeviceAdminReceiver()
+        val intent = android.content.Intent()
+        val warning = receiver.onDisableRequested(context, intent)
+        assertTrue("Warning message must be non-empty", warning.isNotEmpty())
+        assertTrue("Warning message must mention uninstall or PIN", warning.contains("uninstall") || warning.contains("PIN"))
+    }
 }

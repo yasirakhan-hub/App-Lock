@@ -92,14 +92,23 @@ fun DashboardScreen(
     var isDeviceAdminActive by remember { mutableStateOf(DeviceAdminHelper.isDeviceAdminActive(context)) }
     var isSettingsAppProtected by remember { mutableStateOf(prefs.isPackageProtected("com.android.settings")) }
 
-    // Refresh status when returning to dashboard
-    LaunchedEffect(Unit) {
-        isAccessibilityActive = PermissionHelper.isAccessibilityServiceEnabled(context)
-        isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
-        isUsageGranted = PermissionHelper.isUsageAccessGranted(context)
-        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
-        isSettingsAppProtected = prefs.isPackageProtected("com.android.settings")
-        protectedCount = prefs.getProtectedPackages().size
+    // Refresh status when returning to dashboard using Lifecycle events
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                isAccessibilityActive = PermissionHelper.isAccessibilityServiceEnabled(context)
+                isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
+                isUsageGranted = PermissionHelper.isUsageAccessGranted(context)
+                isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+                isSettingsAppProtected = prefs.isPackageProtected("com.android.settings")
+                protectedCount = prefs.getProtectedPackages().size
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     Scaffold(
