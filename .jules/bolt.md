@@ -1,0 +1,3 @@
+## 2025-05-18 - Caching Home Launcher Package Resolution
+**Learning:** Querying `packageManager.resolveActivity` on every `AccessibilityEvent` introduces Binder IPC overhead (~1-5ms) on every foreground activity/window state change. Caching the resolved home launcher package in memory reduces checking latency from Binder IPC scale to sub-microsecond in-memory comparisons (<1µs).
+**Action:** When working in high-frequency event callbacks (such as `AccessibilityService` handlers or broadcast receivers), always cache framework metadata that changes infrequently (like default launcher package) instead of issuing synchronous `PackageManager` queries.

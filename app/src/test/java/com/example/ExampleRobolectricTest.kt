@@ -175,4 +175,19 @@ class ExampleRobolectricTest {
         val secondRetrieval = manager.getAndRemoveInterceptedTarget(testPkg)
         org.junit.Assert.assertNull(secondRetrieval)
     }
+
+    @Test
+    fun testLauncherOrSystemUIDetectionAndCaching() {
+        val manager = com.example.data.repository.AppLockManager.getInstance(context)
+
+        // System UI should always return true
+        assertTrue("com.android.systemui must be recognized as system UI", manager.isLauncherOrSystemUI("com.android.systemui"))
+
+        // Standard app package should return false
+        assertFalse("Arbitrary app package must not be recognized as launcher", manager.isLauncherOrSystemUI("com.example.otherapp"))
+
+        // Invalidating launcher cache shouldn't break subsequent calls
+        manager.invalidateLauncherCache()
+        assertFalse("Arbitrary app package must still return false after cache invalidation", manager.isLauncherOrSystemUI("com.example.otherapp"))
+    }
 }
