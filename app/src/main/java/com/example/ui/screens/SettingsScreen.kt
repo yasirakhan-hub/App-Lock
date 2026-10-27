@@ -102,10 +102,19 @@ fun SettingsScreen(
     var showSecurityLimitationsDialog by remember { mutableStateOf(false) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
-        isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
-        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
+                isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
+                isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     Scaffold(
