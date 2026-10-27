@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -48,11 +47,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
+import com.example.R
 import com.example.data.repository.AppDiscoveryRepository
 import com.example.data.repository.AppLockManager
 import com.example.ui.common.PinDots
@@ -253,11 +254,10 @@ class LockActivity : FragmentActivity() {
                                 modifier = Modifier.size(52.dp)
                             )
                         } else {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_applock_shield_logo),
                                 contentDescription = "Locked",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(42.dp)
                             )
                         }
                     }
