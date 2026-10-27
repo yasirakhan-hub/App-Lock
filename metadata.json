@@ -1,0 +1,6 @@
+{
+  "name": "Secure AppLock",
+  "description": "Native Android app lock to protect installed applications with PIN authentication, accessibility-based foreground monitoring, and secure recovery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
