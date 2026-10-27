@@ -27,6 +27,7 @@ class AppLockPreferences(context: Context) {
         private const val KEY_PROTECTION_ENABLED = "protection_enabled"
         private const val KEY_RELOCK_ON_SCREEN_OFF = "relock_on_screen_off"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
+        private const val KEY_DARK_THEME_OVERRIDE = "dark_theme_override"
 
         private const val KEY_FAILED_ATTEMPTS = "failed_attempts"
         private const val KEY_LOCKOUT_UNTIL_TIMESTAMP = "lockout_until_timestamp"
@@ -81,6 +82,22 @@ class AppLockPreferences(context: Context) {
 
     fun setBiometricEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_BIOMETRIC_ENABLED, enabled).apply()
+    }
+
+    /**
+     * Gets the user's manual dark theme preference, or null if following system default.
+     */
+    fun isDarkThemeOverride(): Boolean? {
+        if (!prefs.contains(KEY_DARK_THEME_OVERRIDE)) return null
+        return prefs.getBoolean(KEY_DARK_THEME_OVERRIDE, false)
+    }
+
+    fun setDarkThemeOverride(isDark: Boolean?) {
+        if (isDark == null) {
+            prefs.edit().remove(KEY_DARK_THEME_OVERRIDE).apply()
+        } else {
+            prefs.edit().putBoolean(KEY_DARK_THEME_OVERRIDE, isDark).apply()
+        }
     }
 
     /**

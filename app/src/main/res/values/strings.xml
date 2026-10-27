@@ -2,4 +2,6 @@
     <string name="app_name">Secure AppLock</string>
     <string name="accessibility_service_name">AppLock Monitor Service</string>
     <string name="accessibility_service_description">Monitors foreground window transitions to prompt for PIN authentication when you open a protected app.</string>
+    <string name="device_admin_label">Secure AppLock Protection</string>
+    <string name="device_admin_description">Prevents unauthorized uninstallation and tampering with AppLock security without entering your master PIN.</string>
 </resources>

@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.security.AppLockPreferences
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
+import com.example.util.DeviceAdminHelper
 import com.example.util.PermissionHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -92,6 +93,7 @@ fun SettingsScreen(
 
     var isAccessibilityGranted by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var isOverlayGranted by remember { mutableStateOf(PermissionHelper.isOverlayPermissionGranted(context)) }
+    var isDeviceAdminActive by remember { mutableStateOf(DeviceAdminHelper.isDeviceAdminActive(context)) }
     var relockOnScreenOff by remember { mutableStateOf(preferences.isRelockOnScreenOff()) }
     var isBiometricEnabled by remember { mutableStateOf(preferences.isBiometricEnabled()) }
 
@@ -103,6 +105,7 @@ fun SettingsScreen(
     LaunchedEffect(Unit) {
         isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
         isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
+        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
     }
 
     Scaffold(
@@ -312,6 +315,28 @@ fun SettingsScreen(
                     PermissionHelper.openOverlaySettings(context)
                 },
                 testTag = "settings_overlay_row"
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            SettingsRow(
+                title = "Device Administrator (Anti-Force Stop & Uninstall)",
+                subtitle = if (isDeviceAdminActive) "Active — Protects against unauthorized uninstallation and tampering" else "Inactive — Tap to activate Device Admin protection",
+                icon = Icons.Default.Security,
+                trailingStatus = if (isDeviceAdminActive) "Protected" else "Action Needed",
+                trailingColor = if (isDeviceAdminActive) Color(0xFF10B981) else Color(0xFFF59E0B),
+                onClick = {
+                    if (isDeviceAdminActive) {
+                        DeviceAdminHelper.deactivateDeviceAdmin(context)
+                        isDeviceAdminActive = false
+                    } else {
+                        try {
+                            context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
+                        } catch (_: Exception) {
+                        }
+                    }
+                },
+                testTag = "settings_device_admin_row"
             )
 
             Spacer(modifier = Modifier.height(24.dp))

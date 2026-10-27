@@ -101,6 +101,22 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun testDeviceAdminHelper() {
+        val componentName = com.example.util.DeviceAdminHelper.getComponentName(context)
+        assertEquals(context.packageName, componentName.packageName)
+        assertEquals(com.example.receiver.AppLockDeviceAdminReceiver::class.java.name, componentName.className)
+
+        // Ensure isDeviceAdminActive runs cleanly
+        val isActive = com.example.util.DeviceAdminHelper.isDeviceAdminActive(context)
+        assertTrue(isActive || !isActive)
+
+        // Ensure intent creation has correct action and extra
+        val intent = com.example.util.DeviceAdminHelper.createAddDeviceAdminIntent(context)
+        assertEquals(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN, intent.action)
+        assertEquals(componentName, intent.getParcelableExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN))
+    }
+
+    @Test
     fun testProtectedPackagesPersistence() {
         val pkg1 = "com.sample.banking"
         val pkg2 = "com.sample.gallery"

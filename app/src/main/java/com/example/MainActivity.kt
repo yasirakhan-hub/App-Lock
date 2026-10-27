@@ -71,15 +71,33 @@ class MainActivity : ComponentActivity() {
         appLockManager = AppLockManager.getInstance(this)
 
         setContent {
-            AppLockTheme {
-                MainAppNavHost(appLockManager = appLockManager)
+            val systemInDark = androidx.compose.foundation.isSystemInDarkTheme()
+            var darkThemeOverride by remember {
+                mutableStateOf(appLockManager.preferences.isDarkThemeOverride())
+            }
+            val isDarkTheme = darkThemeOverride ?: systemInDark
+
+            AppLockTheme(darkTheme = isDarkTheme) {
+                MainAppNavHost(
+                    appLockManager = appLockManager,
+                    isDarkTheme = isDarkTheme,
+                    onToggleTheme = {
+                        val next = !isDarkTheme
+                        darkThemeOverride = next
+                        appLockManager.preferences.setDarkThemeOverride(next)
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-fun MainAppNavHost(appLockManager: AppLockManager) {
+fun MainAppNavHost(
+    appLockManager: AppLockManager,
+    isDarkTheme: Boolean = false,
+    onToggleTheme: () -> Unit = {}
+) {
     val prefs = appLockManager.preferences
     var currentScreen by remember {
         mutableStateOf(
@@ -114,6 +132,8 @@ fun MainAppNavHost(appLockManager: AppLockManager) {
             ScreenState.DASHBOARD -> {
                 DashboardScreen(
                     appLockManager = appLockManager,
+                    isDarkTheme = isDarkTheme,
+                    onToggleTheme = onToggleTheme,
                     onNavigateToAppSelection = { currentScreen = ScreenState.APP_SELECTION },
                     onNavigateToSettings = { currentScreen = ScreenState.SETTINGS },
                     onNavigateToTestLock = { currentScreen = ScreenState.TEST_LOCK }

@@ -23,8 +23,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.LockReset
@@ -65,12 +67,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.AppLockManager
+import com.example.util.DeviceAdminHelper
 import com.example.util.PermissionHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     appLockManager: AppLockManager,
+    isDarkTheme: Boolean = false,
+    onToggleTheme: () -> Unit = {},
     onNavigateToAppSelection: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToTestLock: () -> Unit,
@@ -84,12 +89,16 @@ fun DashboardScreen(
     var isAccessibilityActive by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var isOverlayGranted by remember { mutableStateOf(PermissionHelper.isOverlayPermissionGranted(context)) }
     var isUsageGranted by remember { mutableStateOf(PermissionHelper.isUsageAccessGranted(context)) }
+    var isDeviceAdminActive by remember { mutableStateOf(DeviceAdminHelper.isDeviceAdminActive(context)) }
+    var isSettingsAppProtected by remember { mutableStateOf(prefs.isPackageProtected("com.android.settings")) }
 
     // Refresh status when returning to dashboard
     LaunchedEffect(Unit) {
         isAccessibilityActive = PermissionHelper.isAccessibilityServiceEnabled(context)
         isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
         isUsageGranted = PermissionHelper.isUsageAccessGranted(context)
+        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+        isSettingsAppProtected = prefs.isPackageProtected("com.android.settings")
         protectedCount = prefs.getProtectedPackages().size
     }
 
@@ -121,6 +130,16 @@ fun DashboardScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = onToggleTheme,
+                        modifier = Modifier.testTag("dashboard_theme_toggle_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                            contentDescription = if (isDarkTheme) "Switch to Light Mode" else "Switch to Dark Mode",
+                            tint = if (isDarkTheme) Color(0xFFFBBF24) else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                     IconButton(
                         onClick = onNavigateToSettings,
                         modifier = Modifier.testTag("dashboard_settings_button")
@@ -273,6 +292,73 @@ fun DashboardScreen(
                 },
                 testTag = "perm_overlay_card"
             )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Device Admin Protection Card
+            PermissionStatusCard(
+                title = "Device Admin (Anti-Force Stop & Uninstall)",
+                description = "Grants Device Administrator privileges to prevent unauthorized uninstallation or tampering without your PIN.",
+                isGranted = isDeviceAdminActive,
+                actionLabel = "Activate Admin",
+                onAction = {
+                    try {
+                        context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
+                    } catch (_: Exception) {
+                    }
+                },
+                testTag = "perm_device_admin_card"
+            )
+
+            if (!isSettingsAppProtected) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth().testTag("protect_settings_card")
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Block Force-Stop Bypass",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "To completely prevent intruders from tapping 'Force Stop', lock the Android Settings app. They will not be able to open App Info without your master PIN.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = {
+                                prefs.setPackageProtected("com.android.settings", true)
+                                isSettingsAppProtected = true
+                                protectedCount = prefs.getProtectedPackages().size
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.tertiary,
+                                contentColor = MaterialTheme.colorScheme.onTertiary
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Text("Lock Android Settings Now", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
