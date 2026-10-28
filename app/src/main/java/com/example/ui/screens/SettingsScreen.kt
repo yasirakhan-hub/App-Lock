@@ -329,20 +329,15 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             SettingsRow(
-                title = "Device Administrator (Anti-Force Stop & Uninstall)",
-                subtitle = if (isDeviceAdminActive) "Active — Protects against unauthorized uninstallation and tampering" else "Inactive — Tap to activate Device Admin protection",
+                title = "Device Administrator (Anti-Uninstall Protection)",
+                subtitle = if (isDeviceAdminActive) "Active — Deters casual uninstallation by requiring admin rights removal first" else "Inactive — Tap to prompt Device Admin activation screen",
                 icon = Icons.Default.Security,
                 trailingStatus = if (isDeviceAdminActive) "Protected" else "Action Needed",
                 trailingColor = if (isDeviceAdminActive) Color(0xFF10B981) else Color(0xFFF59E0B),
                 onClick = {
-                    if (isDeviceAdminActive) {
-                        DeviceAdminHelper.deactivateDeviceAdmin(context)
-                        isDeviceAdminActive = false
-                    } else {
-                        try {
-                            context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
-                        } catch (_: Exception) {
-                        }
+                    try {
+                        context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
+                    } catch (_: Exception) {
                     }
                 },
                 testTag = "settings_device_admin_row"
@@ -754,10 +749,10 @@ private fun SecurityLimitationsDialog(onDismiss: () -> Unit) {
                 Text("Honest Android System Boundaries:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Standard Android does not allow third-party apps to prevent:\n" +
-                    "1. Device Safe Mode: Boots without third-party services.\n" +
-                    "2. Force Stop: If an intruder has your device lock and access to Android Settings, they can Force Stop apps unless device owner (MDM) profile is installed.\n" +
-                    "3. Aggressive OEM Battery Killers: Xiaomi, Samsung, and Huawei require setting AppLock to 'No battery restrictions' and 'Autostart' to avoid the OS killing background services.",
+                    "Standard Android security architecture principles:\n" +
+                    "1. Anti-Uninstall Deterrence: Standard Device Administrator requires users to navigate to admin settings and deactivate admin privileges before uninstalling.\n" +
+                    "2. Absolute Uninstall Block: Only Device Owner (MDM/Enterprise Provisioned) apps can strictly call setUninstallBlocked() to prevent uninstallation entirely.\n" +
+                    "3. Device Safe Mode & Settings: Boots without third-party services. AppLock operates fully within standard, compliant Android framework guidelines without bypassing security.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
