@@ -50,6 +50,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -60,12 +62,14 @@ import com.example.R
 import com.example.data.security.AppLockPreferences
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
+import com.example.util.BiometricHelper
 
 private enum class SetupStep {
     WELCOME,
     CREATE_PIN,
     CONFIRM_PIN,
-    SECURITY_QUESTION
+    SECURITY_QUESTION,
+    BIOMETRIC_SETUP
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,6 +79,7 @@ fun OnboardingSetupScreen(
     onSetupComplete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var currentStep by remember { mutableStateOf(SetupStep.WELCOME) }
     var selectedPinLength by remember { mutableIntStateOf(4) }
     var firstPin by remember { mutableStateOf("") }
@@ -428,16 +433,33 @@ fun OnboardingSetupScreen(
                                     preferences.savePin(firstPin)
                                     preferences.saveRecoveryQuestion(selectedQuestion, customAnswer)
                                     preferences.setProtectionEnabled(true)
-                                    onSetupComplete()
+                                    if (BiometricHelper.isBiometricAvailable(context)) {
+                                        currentStep = SetupStep.BIOMETRIC_SETUP
+                                    } else {
+                                        onSetupComplete()
+                                    }
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(50.dp)
                                     .testTag("complete_setup_button")
                             ) {
-                                Text("Complete Setup & Start Locking")
+                                Text("Continue")
                             }
                         }
+                    }
+
+                    SetupStep.BIOMETRIC_SETUP -> {
+                        BiometricSetupStep(
+                            onEnable = {
+                                preferences.setBiometricEnabled(true)
+                                onSetupComplete()
+                            },
+                            onSkip = {
+                                preferences.setBiometricEnabled(false)
+                                onSetupComplete()
+                            }
+                        )
                     }
                 }
             }
@@ -477,7 +499,7 @@ private fun WelcomeStep(
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "Welcome to Secure AppLock",
+                text = "Welcome to Smart AppLock",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
@@ -562,3 +584,110 @@ private fun FeatureRow(
         }
     }
 }
+
+@Composable
+private fun BiometricSetupStep(
+    onEnable: () -> Unit,
+    onSkip: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(modifier = Modifier.height(36.dp))
+
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.size(80.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Fingerprint,
+                        contentDescription = "Fingerprint",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(44.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "Enable Fingerprint Unlock?",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Your device supports biometric authentication. Enable fingerprint unlock to open protected apps and authorize sensitive settings instantly without typing your PIN every time.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    FeatureRow(
+                        title = "Fast & Frictionless",
+                        description = "Touch your sensor to unlock protected apps in milliseconds."
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    FeatureRow(
+                        title = "PIN Remains Your Secure Fallback",
+                        description = "If biometric fails or sensor is dirty, your master PIN is always ready."
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    FeatureRow(
+                        title = "Private & Local",
+                        description = "Biometrics are processed strictly by Android OS hardware. No templates are ever stored."
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Button(
+                onClick = onEnable,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("enable_biometrics_button")
+            ) {
+                Text("Enable Fingerprint Unlock", fontWeight = FontWeight.SemiBold)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            OutlinedButton(
+                onClick = onSkip,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("skip_biometrics_button")
+            ) {
+                Text("Skip & Use PIN Only")
+            }
+        }
+    }
+}
+

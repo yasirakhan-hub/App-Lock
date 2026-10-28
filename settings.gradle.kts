@@ -18,6 +18,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Secure AppLock"
+rootProject.name = "Smart AppLock"
 
 include(":app")

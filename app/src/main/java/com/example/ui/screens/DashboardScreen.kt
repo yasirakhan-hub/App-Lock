@@ -132,7 +132,7 @@ fun DashboardScreen(
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "Secure AppLock",
+                            text = "Smart AppLock",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )

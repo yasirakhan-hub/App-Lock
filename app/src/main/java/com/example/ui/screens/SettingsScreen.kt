@@ -73,6 +73,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.security.AppLockPreferences
+import com.example.ui.common.AuthChallengeDialog
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
 import com.example.util.DeviceAdminHelper
@@ -101,20 +102,16 @@ fun SettingsScreen(
     var showChangeQuestionDialog by remember { mutableStateOf(false) }
     var showSecurityLimitationsDialog by remember { mutableStateOf(false) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
+    var showAuthForChangePin by remember { mutableStateOf(false) }
+    var showAuthForChangeQuestion by remember { mutableStateOf(false) }
+    var showAuthForDeactivateAdmin by remember { mutableStateOf(false) }
+    var showAuthForReset by remember { mutableStateOf(false) }
+    var pendingRelockPolicy by remember { mutableStateOf<Boolean?>(null) }
 
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
-                isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
-                isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
+    LaunchedEffect(Unit) {
+        isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
+        isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
+        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
     }
 
     Scaffold(
@@ -153,7 +150,7 @@ fun SettingsScreen(
                 title = "Change Master PIN",
                 subtitle = "Update your current ${preferences.getPinLength()}-digit security PIN",
                 icon = Icons.Default.Key,
-                onClick = { showChangePinDialog = true },
+                onClick = { showAuthForChangePin = true },
                 testTag = "settings_change_pin_row"
             )
 
@@ -163,7 +160,7 @@ fun SettingsScreen(
                 title = "Recovery Security Question",
                 subtitle = preferences.getSecurityQuestion() ?: "Not configured",
                 icon = Icons.Default.HelpOutline,
-                onClick = { showChangeQuestionDialog = true },
+                onClick = { showAuthForChangeQuestion = true },
                 testTag = "settings_change_question_row"
             )
 
@@ -260,8 +257,9 @@ fun SettingsScreen(
                         RadioButton(
                             selected = !relockOnScreenOff,
                             onClick = {
-                                relockOnScreenOff = false
-                                preferences.setRelockOnScreenOff(false)
+                                if (relockOnScreenOff) {
+                                    pendingRelockPolicy = false
+                                }
                             }
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -282,8 +280,9 @@ fun SettingsScreen(
                         RadioButton(
                             selected = relockOnScreenOff,
                             onClick = {
-                                relockOnScreenOff = true
-                                preferences.setRelockOnScreenOff(true)
+                                if (!relockOnScreenOff) {
+                                    pendingRelockPolicy = true
+                                }
                             }
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -329,15 +328,19 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             SettingsRow(
-                title = "Device Administrator (Anti-Uninstall Protection)",
-                subtitle = if (isDeviceAdminActive) "Active — Deters casual uninstallation by requiring admin rights removal first" else "Inactive — Tap to prompt Device Admin activation screen",
+                title = "Device Administrator (Anti-Force Stop & Uninstall)",
+                subtitle = if (isDeviceAdminActive) "Active — Protects against unauthorized uninstallation and tampering" else "Inactive — Tap to activate Device Admin protection",
                 icon = Icons.Default.Security,
                 trailingStatus = if (isDeviceAdminActive) "Protected" else "Action Needed",
                 trailingColor = if (isDeviceAdminActive) Color(0xFF10B981) else Color(0xFFF59E0B),
                 onClick = {
-                    try {
-                        context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
-                    } catch (_: Exception) {
+                    if (isDeviceAdminActive) {
+                        showAuthForDeactivateAdmin = true
+                    } else {
+                        try {
+                            context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
+                        } catch (_: Exception) {
+                        }
                     }
                 },
                 testTag = "settings_device_admin_row"
@@ -374,7 +377,31 @@ fun SettingsScreen(
                 Text("Reset All AppLock Data & PIN")
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // Section 6: About
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "ABOUT",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFBBF24),
+                    letterSpacing = 2.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Developed by Yasir A Khan",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
         }
 
         // Change PIN Dialog
@@ -410,9 +437,8 @@ fun SettingsScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            preferences.clearAllData()
                             showResetConfirmDialog = false
-                            onResetCompleted()
+                            showAuthForReset = true
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
@@ -424,6 +450,79 @@ fun SettingsScreen(
                         Text("Cancel")
                     }
                 }
+            )
+        }
+
+        // Auth challenge for Change PIN
+        if (showAuthForChangePin) {
+            AuthChallengeDialog(
+                title = "Change Master PIN",
+                subtitle = "Touch fingerprint sensor or enter PIN to change master PIN",
+                preferences = preferences,
+                onAuthorized = {
+                    showAuthForChangePin = false
+                    showChangePinDialog = true
+                },
+                onDismiss = { showAuthForChangePin = false }
+            )
+        }
+
+        // Auth challenge for Recovery Question
+        if (showAuthForChangeQuestion) {
+            AuthChallengeDialog(
+                title = "Security Recovery Question",
+                subtitle = "Touch fingerprint sensor or enter PIN to modify question",
+                preferences = preferences,
+                onAuthorized = {
+                    showAuthForChangeQuestion = false
+                    showChangeQuestionDialog = true
+                },
+                onDismiss = { showAuthForChangeQuestion = false }
+            )
+        }
+
+        // Auth challenge for Deactivating Device Admin
+        if (showAuthForDeactivateAdmin) {
+            AuthChallengeDialog(
+                title = "Authorize Admin Deactivation",
+                subtitle = "Touch fingerprint sensor or enter PIN to remove Admin privileges",
+                preferences = preferences,
+                onAuthorized = {
+                    DeviceAdminHelper.deactivateDeviceAdmin(context)
+                    isDeviceAdminActive = false
+                    showAuthForDeactivateAdmin = false
+                },
+                onDismiss = { showAuthForDeactivateAdmin = false }
+            )
+        }
+
+        // Auth challenge for Relock Policy
+        pendingRelockPolicy?.let { chosenPolicy ->
+            AuthChallengeDialog(
+                title = "Update Relock Policy",
+                subtitle = "Touch fingerprint sensor or enter PIN to update policy",
+                preferences = preferences,
+                onAuthorized = {
+                    preferences.setRelockOnScreenOff(chosenPolicy)
+                    relockOnScreenOff = chosenPolicy
+                    pendingRelockPolicy = null
+                },
+                onDismiss = { pendingRelockPolicy = null }
+            )
+        }
+
+        // Auth challenge for Reset All AppLock Data & PIN
+        if (showAuthForReset) {
+            AuthChallengeDialog(
+                title = "Authorize Master Reset",
+                subtitle = "Touch fingerprint sensor or enter PIN to permanently reset",
+                preferences = preferences,
+                onAuthorized = {
+                    showAuthForReset = false
+                    preferences.clearAllData()
+                    onResetCompleted()
+                },
+                onDismiss = { showAuthForReset = false }
             )
         }
     }
@@ -515,7 +614,7 @@ private fun ChangePinDialog(
     onDismiss: () -> Unit,
     onSuccess: () -> Unit
 ) {
-    var step by remember { mutableIntStateOf(1) } // 1: verify current, 2: enter new, 3: confirm new
+    var step by remember { mutableIntStateOf(2) } // 2: enter new, 3: confirm new
     val pinLength = preferences.getPinLength()
     var currentInput by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
@@ -749,10 +848,10 @@ private fun SecurityLimitationsDialog(onDismiss: () -> Unit) {
                 Text("Honest Android System Boundaries:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Standard Android security architecture principles:\n" +
-                    "1. Anti-Uninstall Deterrence: Standard Device Administrator requires users to navigate to admin settings and deactivate admin privileges before uninstalling.\n" +
-                    "2. Absolute Uninstall Block: Only Device Owner (MDM/Enterprise Provisioned) apps can strictly call setUninstallBlocked() to prevent uninstallation entirely.\n" +
-                    "3. Device Safe Mode & Settings: Boots without third-party services. AppLock operates fully within standard, compliant Android framework guidelines without bypassing security.",
+                    "Standard Android does not allow third-party apps to prevent:\n" +
+                    "1. Device Safe Mode: Boots without third-party services.\n" +
+                    "2. Force Stop: If an intruder has your device lock and access to Android Settings, they can Force Stop apps unless device owner (MDM) profile is installed.\n" +
+                    "3. Aggressive OEM Battery Killers: Xiaomi, Samsung, and Huawei require setting AppLock to 'No battery restrictions' and 'Autostart' to avoid the OS killing background services.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

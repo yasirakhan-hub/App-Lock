@@ -1,7 +1,6 @@
 package com.example
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -9,16 +8,21 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -33,10 +37,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import com.example.data.repository.AppLockManager
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
@@ -44,14 +50,13 @@ import com.example.ui.screens.AppSelectionScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.OnboardingSetupScreen
 import com.example.ui.screens.SettingsScreen
-import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.TestLockScreen
 import com.example.ui.theme.AppLockTheme
+import com.example.util.BiometricHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class ScreenState {
-    SPLASH,
     AUTH_GATE,
     ONBOARDING,
     DASHBOARD,
@@ -60,7 +65,7 @@ enum class ScreenState {
     TEST_LOCK
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private lateinit var appLockManager: AppLockManager
 
@@ -98,7 +103,15 @@ fun MainAppNavHost(
     onToggleTheme: () -> Unit = {}
 ) {
     val prefs = appLockManager.preferences
-    var currentScreen by remember { mutableStateOf(ScreenState.SPLASH) }
+    var currentScreen by remember {
+        mutableStateOf(
+            if (!prefs.isPinConfigured()) {
+                ScreenState.ONBOARDING
+            } else {
+                ScreenState.AUTH_GATE
+            }
+        )
+    }
 
     AnimatedContent(
         targetState = currentScreen,
@@ -106,19 +119,6 @@ fun MainAppNavHost(
         label = "AppScreenTransition"
     ) { screen ->
         when (screen) {
-            ScreenState.SPLASH -> {
-                SplashScreen(
-                    appLockManager = appLockManager,
-                    onInitComplete = { isPinConfigured ->
-                        currentScreen = if (!isPinConfigured) {
-                            ScreenState.ONBOARDING
-                        } else {
-                            ScreenState.AUTH_GATE
-                        }
-                    }
-                )
-            }
-
             ScreenState.AUTH_GATE -> {
                 DashboardAuthGate(
                     appLockManager = appLockManager,
@@ -172,13 +172,15 @@ fun MainAppNavHost(
 }
 
 /**
- * Gatekeeper requiring master PIN to open the AppLock configuration dashboard.
+ * Gatekeeper requiring master PIN or Biometric to open the Smart AppLock configuration dashboard.
  */
 @Composable
 fun DashboardAuthGate(
     appLockManager: AppLockManager,
     onUnlockSuccess: () -> Unit
 ) {
+    val context = LocalContext.current
+    val activity = context as? FragmentActivity
     val prefs = appLockManager.preferences
     val pinLength = prefs.getPinLength()
     val scope = rememberCoroutineScope()
@@ -187,6 +189,37 @@ fun DashboardAuthGate(
     var isError by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var lockoutSeconds by remember { mutableIntStateOf(prefs.getRemainingLockoutSeconds()) }
+
+    val isBiometricSupported = remember(activity) {
+        activity != null && BiometricHelper.isBiometricAvailable(activity)
+    }
+    val isBiometricEnabled = isBiometricSupported && prefs.isBiometricEnabled()
+
+    fun triggerBiometricPrompt() {
+        if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
+            BiometricHelper.showBiometricPrompt(
+                activity = activity,
+                title = "Unlock Smart AppLock",
+                subtitle = "Touch the fingerprint sensor to access dashboard",
+                negativeButtonText = "Use PIN",
+                onSuccess = {
+                    prefs.resetFailedAttempts()
+                    onUnlockSuccess()
+                },
+                onError = { _, _ ->
+                    // Graceful fallback to PIN
+                }
+            )
+        }
+    }
+
+    // Automatically challenge with biometric authentication when opening the app
+    LaunchedEffect(Unit) {
+        if (isBiometricEnabled && lockoutSeconds == 0) {
+            delay(250L)
+            triggerBiometricPrompt()
+        }
+    }
 
     LaunchedEffect(lockoutSeconds) {
         if (lockoutSeconds > 0) {
@@ -213,10 +246,11 @@ fun DashboardAuthGate(
                     modifier = Modifier.size(72.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Image(
-                            painter = painterResource(id = R.drawable.ic_applock_shield_logo),
+                        Icon(
+                            imageVector = Icons.Default.Shield,
                             contentDescription = "Security Shield",
-                            modifier = Modifier.size(44.dp)
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(38.dp)
                         )
                     }
                 }
@@ -224,7 +258,7 @@ fun DashboardAuthGate(
                 Spacer(modifier = Modifier.height(20.dp))
 
                 Text(
-                    text = "AppLock Security",
+                    text = "Smart AppLock Security",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -232,7 +266,7 @@ fun DashboardAuthGate(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Enter master PIN to manage protected apps",
+                    text = if (isBiometricEnabled) "Use fingerprint or enter master PIN" else "Enter master PIN to manage protected apps",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -295,7 +329,22 @@ fun DashboardAuthGate(
                         errorMsg = null
                     }
                 },
-                lockoutSeconds = lockoutSeconds
+                lockoutSeconds = lockoutSeconds,
+                extraLeftAction = {
+                    if (isBiometricEnabled) {
+                        IconButton(
+                            onClick = { triggerBiometricPrompt() },
+                            modifier = Modifier.testTag("dashboard_biometric_trigger_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Fingerprint,
+                                contentDescription = "Unlock with Fingerprint",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(34.dp)
+                            )
+                        }
+                    }
+                }
             )
 
             Spacer(modifier = Modifier.height(8.dp))

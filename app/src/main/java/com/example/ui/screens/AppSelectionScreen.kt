@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.AppInfo
 import com.example.data.repository.AppDiscoveryRepository
 import com.example.data.security.AppLockPreferences
+import com.example.ui.common.AuthChallengeDialog
 import kotlinx.coroutines.launch
 
 private enum class FilterTab {
@@ -88,6 +89,7 @@ fun AppSelectionScreen(
     var searchQuery by remember { mutableStateOf("") }
     var currentFilter by remember { mutableStateOf(FilterTab.ALL) }
     var pendingCriticalAppToLock by remember { mutableStateOf<AppInfo?>(null) }
+    var pendingAuthAppToggle by remember { mutableStateOf<Pair<AppInfo, Boolean>?>(null) }
 
     fun loadApps() {
         scope.launch {
@@ -250,15 +252,7 @@ fun AppSelectionScreen(
                         AppListItem(
                             app = app,
                             onToggleProtection = { isLocked ->
-                                if (isLocked && app.isCriticalSystemComponent) {
-                                    pendingCriticalAppToLock = app
-                                } else {
-                                    preferences.setPackageProtected(app.packageName, isLocked)
-                                    apps = apps.map {
-                                        if (it.packageName == app.packageName) it.copy(isProtected = isLocked)
-                                        else it
-                                    }
-                                }
+                                pendingAuthAppToggle = Pair(app, isLocked)
                             }
                         )
                     }
@@ -267,6 +261,30 @@ fun AppSelectionScreen(
                     }
                 }
             }
+        }
+
+        // Authentication Challenge before modifying protection
+        pendingAuthAppToggle?.let { (targetApp, toLock) ->
+            AuthChallengeDialog(
+                title = if (toLock) "Protect ${targetApp.name}" else "Unprotect ${targetApp.name}",
+                subtitle = if (toLock) "Touch fingerprint sensor or enter master PIN to protect" else "Touch fingerprint sensor or enter master PIN to remove protection",
+                preferences = preferences,
+                onAuthorized = {
+                    pendingAuthAppToggle = null
+                    if (toLock && targetApp.isCriticalSystemComponent) {
+                        pendingCriticalAppToLock = targetApp
+                    } else {
+                        preferences.setPackageProtected(targetApp.packageName, toLock)
+                        apps = apps.map {
+                            if (it.packageName == targetApp.packageName) it.copy(isProtected = toLock)
+                            else it
+                        }
+                    }
+                },
+                onDismiss = {
+                    pendingAuthAppToggle = null
+                }
+            )
         }
 
         // Warning Dialog for Critical System Components

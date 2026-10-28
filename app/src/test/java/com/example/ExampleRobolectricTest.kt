@@ -31,7 +31,7 @@ class ExampleRobolectricTest {
     @Test
     fun testAppNameResource() {
         val appName = context.getString(R.string.app_name)
-        assertEquals("Secure AppLock", appName)
+        assertEquals("Smart AppLock", appName)
     }
 
     @Test
