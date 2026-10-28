@@ -73,7 +73,12 @@ class AppDiscoveryRepository(private val context: Context) {
                         pkgName == "com.android.settings" ||
                         pkgName.contains("dialer", ignoreCase = true)
 
-                val iconBitmap = getAppIcon(pkgName, resolveInfo.loadIcon(packageManager))
+                // Check iconCache first to avoid redundant PackageManager Binder IPC and drawable decoding
+                val iconBitmap = if (iconCache.containsKey(pkgName)) {
+                    iconCache[pkgName]
+                } else {
+                    getAppIcon(pkgName, resolveInfo.loadIcon(packageManager))
+                }
 
                 apps.add(
                     AppInfo(

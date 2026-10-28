@@ -12,6 +12,11 @@ class AppLockPreferences(context: Context) {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // In-memory cache of protected package names to eliminate SharedPreferences XML/map queries
+    // on every AccessibilityEvent foreground window state check.
+    @Volatile
+    private var cachedProtectedPackages: Set<String>? = null
+
     companion object {
         private const val PREFS_NAME = "secure_applock_prefs"
 
@@ -135,14 +140,23 @@ class AppLockPreferences(context: Context) {
 
     /**
      * Set of package names protected by AppLock.
+     * Caches protected packages in memory for sub-microsecond lookups during window transition events.
      */
     fun getProtectedPackages(): Set<String> {
-        return prefs.getStringSet(KEY_PROTECTED_PACKAGES, emptySet()) ?: emptySet()
+        return cachedProtectedPackages ?: synchronized(this) {
+            cachedProtectedPackages ?: (prefs.getStringSet(KEY_PROTECTED_PACKAGES, emptySet()) ?: emptySet()).also {
+                cachedProtectedPackages = it
+            }
+        }
     }
 
     fun setProtectedPackages(packages: Set<String>) {
+        val newSet = HashSet(packages)
+        synchronized(this) {
+            cachedProtectedPackages = newSet
+        }
         prefs.edit()
-            .putStringSet(KEY_PROTECTED_PACKAGES, HashSet(packages))
+            .putStringSet(KEY_PROTECTED_PACKAGES, newSet)
             .apply()
     }
 
@@ -228,6 +242,9 @@ class AppLockPreferences(context: Context) {
      * Resets all AppLock data to fresh state.
      */
     fun clearAllData() {
+        synchronized(this) {
+            cachedProtectedPackages = null
+        }
         prefs.edit().clear().apply()
     }
 }
