@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import androidx.core.content.IntentCompat
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.security.AppLockPreferences
 import com.example.data.security.PinHashUtil
@@ -113,7 +114,7 @@ class ExampleRobolectricTest {
         // Ensure intent creation has correct action and extra
         val intent = com.example.util.DeviceAdminHelper.createAddDeviceAdminIntent(context)
         assertEquals(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN, intent.action)
-        assertEquals(componentName, intent.getParcelableExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN))
+        assertEquals(componentName, IntentCompat.getParcelableExtra(intent, android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, android.content.ComponentName::class.java))
     }
 
     @Test

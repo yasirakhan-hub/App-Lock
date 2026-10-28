@@ -398,7 +398,7 @@ fun SettingsScreen(
                 Text(
                     text = "Developed by Yasir A Khan",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.primary,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
             }
