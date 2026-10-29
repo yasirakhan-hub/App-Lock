@@ -6,9 +6,19 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoInsetBox
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -160,38 +170,38 @@ fun OnboardingSetupScreen(
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                // PIN Length Selector
-                                Row(
-                                    horizontalArrangement = Arrangement.Center,
-                                    modifier = Modifier.padding(bottom = 16.dp)
+                                // Neomorphic PIN Length Selector
+                                NeoInsetBox(
+                                    shape = NeoShapes.MediumCard,
+                                    contentPadding = PaddingValues(6.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.75f)
+                                        .padding(bottom = 16.dp)
                                 ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            selectedPinLength = 4
-                                            firstPin = ""
-                                        },
-                                        shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp),
-                                        colors = if (selectedPinLength == 4) {
-                                            androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                                                containerColor = MaterialTheme.colorScheme.primaryContainer
-                                            )
-                                        } else androidx.compose.material3.ButtonDefaults.outlinedButtonColors()
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Text("4 Digits")
-                                    }
-                                    OutlinedButton(
-                                        onClick = {
-                                            selectedPinLength = 6
-                                            firstPin = ""
-                                        },
-                                        shape = RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp),
-                                        colors = if (selectedPinLength == 6) {
-                                            androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                                                containerColor = MaterialTheme.colorScheme.primaryContainer
-                                            )
-                                        } else androidx.compose.material3.ButtonDefaults.outlinedButtonColors()
-                                    ) {
-                                        Text("6 Digits")
+                                        listOf(4 to "4 Digits", 6 to "6 Digits").forEach { (len, label) ->
+                                            val isSelected = selectedPinLength == len
+                                            NeoButton(
+                                                onClick = {
+                                                    selectedPinLength = len
+                                                    firstPin = ""
+                                                },
+                                                isPrimaryGlowing = isSelected,
+                                                shape = NeoShapes.SmallControl,
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text(
+                                                    text = label,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                    color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
                                     }
                                 }
 
@@ -308,13 +318,15 @@ fun OnboardingSetupScreen(
                                     }
                                 },
                                 extraLeftAction = {
-                                    TextButton(onClick = {
-                                        firstPin = ""
-                                        confirmPin = ""
-                                        currentStep = SetupStep.CREATE_PIN
-                                    }) {
-                                        Text("Back")
-                                    }
+                                    NeoButton(
+                                        text = "Back",
+                                        shape = NeoShapes.SmallControl,
+                                        onClick = {
+                                            firstPin = ""
+                                            confirmPin = ""
+                                            currentStep = SetupStep.CREATE_PIN
+                                        }
+                                    )
                                 }
                             )
 
@@ -422,11 +434,13 @@ fun OnboardingSetupScreen(
 
                             Spacer(modifier = Modifier.height(32.dp))
 
-                            Button(
+                            NeoButton(
+                                text = "Continue",
+                                isPrimaryGlowing = true,
                                 onClick = {
                                     if (customAnswer.trim().length < 2) {
                                         answerError = "Please enter an answer with at least 2 characters."
-                                        return@Button
+                                        return@NeoButton
                                     }
 
                                     // Save PIN and recovery question
@@ -441,11 +455,8 @@ fun OnboardingSetupScreen(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(50.dp)
                                     .testTag("complete_setup_button")
-                            ) {
-                                Text("Continue")
-                            }
+                            )
                         }
                     }
 
@@ -471,6 +482,7 @@ fun OnboardingSetupScreen(
 private fun WelcomeStep(
     onGetStarted: () -> Unit
 ) {
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -482,18 +494,31 @@ private fun WelcomeStep(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.height(24.dp))
 
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(96.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_applock_shield_logo),
-                        contentDescription = "Shield",
-                        modifier = Modifier.size(60.dp)
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = if (isDarkTheme) {
+                                listOf(NeoPalette.SurfaceLight, NeoPalette.SurfaceDark)
+                            } else {
+                                listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
+                            }
+                        )
                     )
-                }
+                    .border(
+                        1.5.dp,
+                        if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant,
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_applock_shield_logo),
+                    contentDescription = "Shield",
+                    modifier = Modifier.size(60.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -516,13 +541,11 @@ private fun WelcomeStep(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Feature Highlights
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(16.dp),
+            // Feature Highlights (NeoCard owns internal 16.dp padding)
+            NeoCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     FeatureRow(
                         title = "Real App Protection",
                         description = "Locks individual apps (banking, gallery, messaging) with a master PIN."
@@ -543,15 +566,14 @@ private fun WelcomeStep(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        Button(
+        NeoButton(
+            text = "Set Up AppLock Now",
             onClick = onGetStarted,
+            isPrimaryGlowing = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
                 .testTag("get_started_button")
-        ) {
-            Text("Set Up AppLock Now", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        }
+        )
     }
 }
 
@@ -590,6 +612,7 @@ private fun BiometricSetupStep(
     onEnable: () -> Unit,
     onSkip: () -> Unit
 ) {
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -601,19 +624,32 @@ private fun BiometricSetupStep(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.height(36.dp))
 
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(80.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Fingerprint,
-                        contentDescription = "Fingerprint",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(44.dp)
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = if (isDarkTheme) {
+                                listOf(NeoPalette.SurfaceLight, NeoPalette.SurfaceDark)
+                            } else {
+                                listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
+                            }
+                        )
                     )
-                }
+                    .border(
+                        1.5.dp,
+                        if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant,
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Fingerprint,
+                    contentDescription = "Fingerprint",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(44.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -636,12 +672,10 @@ private fun BiometricSetupStep(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                shape = RoundedCornerShape(16.dp),
+            NeoCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     FeatureRow(
                         title = "Fast & Frictionless",
                         description = "Touch your sensor to unlock protected apps in milliseconds."
@@ -666,27 +700,24 @@ private fun BiometricSetupStep(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Button(
+            NeoButton(
+                text = "Enable Fingerprint Unlock",
                 onClick = onEnable,
+                isPrimaryGlowing = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp)
                     .testTag("enable_biometrics_button")
-            ) {
-                Text("Enable Fingerprint Unlock", fontWeight = FontWeight.SemiBold)
-            }
+            )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            OutlinedButton(
+            NeoButton(
+                text = "Skip & Use PIN Only",
                 onClick = onSkip,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp)
                     .testTag("skip_biometrics_button")
-            ) {
-                Text("Skip & Use PIN Only")
-            }
+            )
         }
     }
 }

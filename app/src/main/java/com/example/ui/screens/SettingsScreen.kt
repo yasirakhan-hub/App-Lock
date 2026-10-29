@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Fingerprint
@@ -66,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -74,6 +76,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.security.AppLockPreferences
 import com.example.ui.common.AuthChallengeDialog
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
+import com.example.ui.common.NeoStatusBadge
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
 import com.example.util.DeviceAdminHelper
@@ -97,15 +104,22 @@ fun SettingsScreen(
     var isDeviceAdminActive by remember { mutableStateOf(DeviceAdminHelper.isDeviceAdminActive(context)) }
     var relockOnScreenOff by remember { mutableStateOf(preferences.isRelockOnScreenOff()) }
     var isBiometricEnabled by remember { mutableStateOf(preferences.isBiometricEnabled()) }
+    var isCalcSecretConfigured by remember { mutableStateOf(preferences.isCalculatorSecretConfigured()) }
+    var isCalcDisguiseEnabled by remember { mutableStateOf(preferences.isCalculatorDisguiseEnabled()) }
 
     var showChangePinDialog by remember { mutableStateOf(false) }
     var showChangeQuestionDialog by remember { mutableStateOf(false) }
     var showSecurityLimitationsDialog by remember { mutableStateOf(false) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
+    var showConfigureCalcSecretDialog by remember { mutableStateOf(false) }
+    var enableDisguiseAfterSecretSetup by remember { mutableStateOf(false) }
+
     var showAuthForChangePin by remember { mutableStateOf(false) }
     var showAuthForChangeQuestion by remember { mutableStateOf(false) }
     var showAuthForDeactivateAdmin by remember { mutableStateOf(false) }
     var showAuthForReset by remember { mutableStateOf(false) }
+    var showAuthForCalcSecret by remember { mutableStateOf(false) }
+    var pendingCalcDisguiseToggle by remember { mutableStateOf<Boolean?>(null) }
     var pendingRelockPolicy by remember { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(Unit) {
@@ -166,25 +180,26 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+            val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+            NeoCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("settings_biometric_card")
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                         Surface(
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            color = if (isDarkTheme) NeoPalette.SurfaceLight else MaterialTheme.colorScheme.surfaceVariant,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant
+                            ),
                             modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -229,16 +244,104 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            // Section 1B: Calculator Disguise & Vault Gateway
+            SettingsSectionHeader(title = "Calculator Disguise & Vault Gateway")
+
+            NeoCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_calc_disguise_card")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Surface(
+                            shape = CircleShape,
+                            color = if (isDarkTheme) NeoPalette.SurfaceLight else MaterialTheme.colorScheme.surfaceVariant,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Calculate,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Calculator Disguise",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                NeoStatusBadge(
+                                    text = if (isCalcDisguiseEnabled) "Configured & Active" else "Disabled",
+                                    color = if (isCalcDisguiseEnabled) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Open a real calculator when launching Smart AppLock. Enter your secret code + '=' then verify master PIN/fingerprint to open Vault.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = isCalcDisguiseEnabled,
+                        onCheckedChange = { checked ->
+                            pendingCalcDisguiseToggle = checked
+                        },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.primary,
+                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                        ),
+                        modifier = Modifier.testTag("settings_calc_disguise_switch")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            SettingsRow(
+                title = if (isCalcSecretConfigured) "Change Secret Sequence" else "Set Secret Sequence",
+                subtitle = if (isCalcSecretConfigured) {
+                    "Configured (${preferences.getCalculatorSecretLength()} digits + '='). Stored as salted hash."
+                } else {
+                    "Configure a 4–8 digit sequence followed by '=' to trigger the Vault gateway"
+                },
+                icon = Icons.Default.Key,
+                trailingStatus = if (isCalcSecretConfigured) "Configured" else "Not Set",
+                trailingColor = if (isCalcSecretConfigured) Color(0xFF10B981) else Color(0xFFF59E0B),
+                onClick = {
+                    enableDisguiseAfterSecretSetup = false
+                    showAuthForCalcSecret = true
+                },
+                testTag = "settings_calc_secret_row"
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             // Section 2: Relock Behavior
             SettingsSectionHeader(title = "Relock Policy")
 
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+            NeoCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = "When should an unlocked application be locked again?",
                         style = MaterialTheme.typography.bodyMedium,
@@ -364,18 +467,15 @@ fun SettingsScreen(
             // Section 5: Reset / Clear
             SettingsSectionHeader(title = "Danger Zone")
 
-            OutlinedButton(
+            NeoButton(
+                text = "Reset All AppLock Data & PIN",
                 onClick = { showResetConfirmDialog = true },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                icon = Icons.Default.DeleteForever,
+                isDestructive = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("settings_reset_data_button")
-            ) {
-                Icon(imageVector = Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Reset All AppLock Data & PIN")
-            }
+            )
 
             Spacer(modifier = Modifier.height(28.dp))
 
@@ -432,23 +532,25 @@ fun SettingsScreen(
             AlertDialog(
                 onDismissRequest = { showResetConfirmDialog = false },
                 icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                title = { Text("Reset AppLock?") },
+                title = { Text("Reset AppLock?", fontWeight = FontWeight.Bold) },
                 text = { Text("This will permanently clear your master PIN, security question, and all protected package selections. You will return to first-time setup.") },
                 confirmButton = {
-                    Button(
+                    NeoButton(
+                        text = "Reset Everything",
+                        isDestructive = true,
+                        shape = NeoShapes.SmallControl,
                         onClick = {
                             showResetConfirmDialog = false
                             showAuthForReset = true
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Text("Reset Everything")
-                    }
+                        }
+                    )
                 },
                 dismissButton = {
-                    TextButton(onClick = { showResetConfirmDialog = false }) {
-                        Text("Cancel")
-                    }
+                    NeoButton(
+                        text = "Cancel",
+                        shape = NeoShapes.SmallControl,
+                        onClick = { showResetConfirmDialog = false }
+                    )
                 }
             )
         }
@@ -525,17 +627,75 @@ fun SettingsScreen(
                 onDismiss = { showAuthForReset = false }
             )
         }
+
+        // Auth challenge for Calculator Disguise toggle
+        pendingCalcDisguiseToggle?.let { targetEnabled ->
+            AuthChallengeDialog(
+                title = if (targetEnabled) "Enable Calculator Disguise" else "Disable Calculator Disguise",
+                subtitle = "Touch fingerprint sensor or enter PIN to update Calculator Disguise",
+                preferences = preferences,
+                onAuthorized = {
+                    pendingCalcDisguiseToggle = null
+                    if (targetEnabled && !preferences.isCalculatorSecretConfigured()) {
+                        enableDisguiseAfterSecretSetup = true
+                        showConfigureCalcSecretDialog = true
+                    } else {
+                        preferences.setCalculatorDisguiseEnabled(targetEnabled)
+                        isCalcDisguiseEnabled = preferences.isCalculatorDisguiseEnabled()
+                    }
+                },
+                onDismiss = { pendingCalcDisguiseToggle = null }
+            )
+        }
+
+        // Auth challenge for configuring Calculator Secret Sequence
+        if (showAuthForCalcSecret) {
+            AuthChallengeDialog(
+                title = "Configure Secret Sequence",
+                subtitle = "Touch fingerprint sensor or enter PIN to set your calculator secret sequence",
+                preferences = preferences,
+                onAuthorized = {
+                    showAuthForCalcSecret = false
+                    showConfigureCalcSecretDialog = true
+                },
+                onDismiss = {
+                    showAuthForCalcSecret = false
+                    enableDisguiseAfterSecretSetup = false
+                }
+            )
+        }
+
+        // Configure Calculator Secret Sequence Dialog
+        if (showConfigureCalcSecretDialog) {
+            ConfigureSecretSequenceDialog(
+                onDismiss = {
+                    showConfigureCalcSecretDialog = false
+                    enableDisguiseAfterSecretSetup = false
+                },
+                onSaveSequence = { digits ->
+                    preferences.saveCalculatorSecretSequence(digits)
+                    isCalcSecretConfigured = true
+                    if (enableDisguiseAfterSecretSetup) {
+                        preferences.setCalculatorDisguiseEnabled(true)
+                        enableDisguiseAfterSecretSetup = false
+                    }
+                    isCalcDisguiseEnabled = preferences.isCalculatorDisguiseEnabled()
+                    showConfigureCalcSecretDialog = false
+                }
+            )
+        }
     }
 }
 
 @Composable
 private fun SettingsSectionHeader(title: String) {
     Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
+        text = title.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
+        letterSpacing = 1.2.sp,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(bottom = 8.dp)
+        modifier = Modifier.padding(bottom = 8.dp, top = 4.dp)
     )
 }
 
@@ -549,24 +709,24 @@ private fun SettingsRow(
     onClick: () -> Unit,
     testTag: String
 ) {
-    Card(
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    NeoCard(
         onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag(testTag)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = if (isDarkTheme) NeoPalette.SurfaceLight else MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant
+                ),
                 modifier = Modifier.size(40.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -583,19 +743,11 @@ private fun SettingsRow(
             }
 
             if (trailingStatus != null) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = trailingColor.copy(alpha = 0.15f),
+                NeoStatusBadge(
+                    text = trailingStatus,
+                    color = trailingColor,
                     modifier = Modifier.padding(start = 8.dp)
-                ) {
-                    Text(
-                        text = trailingStatus,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = trailingColor,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
+                )
             } else {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,
@@ -718,9 +870,11 @@ private fun ChangePinDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
+            NeoButton(
+                text = "Cancel",
+                shape = NeoShapes.SmallControl,
+                onClick = onDismiss
+            )
         }
     )
 }
@@ -798,19 +952,26 @@ private fun ChangeQuestionDialog(
             }
         },
         confirmButton = {
-            Button(onClick = {
-                if (answerText.trim().length < 2) {
-                    errorMsg = "Answer must be at least 2 characters"
-                    return@Button
+            NeoButton(
+                text = "Save",
+                isPrimaryGlowing = true,
+                shape = NeoShapes.SmallControl,
+                onClick = {
+                    if (answerText.trim().length < 2) {
+                        errorMsg = "Answer must be at least 2 characters"
+                        return@NeoButton
+                    }
+                    preferences.saveRecoveryQuestion(selectedQuestion, answerText)
+                    onSuccess()
                 }
-                preferences.saveRecoveryQuestion(selectedQuestion, answerText)
-                onSuccess()
-            }) {
-                Text("Save")
-            }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            NeoButton(
+                text = "Cancel",
+                shape = NeoShapes.SmallControl,
+                onClick = onDismiss
+            )
         }
     )
 }
@@ -858,7 +1019,118 @@ private fun SecurityLimitationsDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) { Text("Understood") }
+            NeoButton(
+                text = "Understood",
+                isPrimaryGlowing = true,
+                shape = NeoShapes.SmallControl,
+                onClick = onDismiss
+            )
         }
     )
 }
+
+@Composable
+private fun ConfigureSecretSequenceDialog(
+    onDismiss: () -> Unit,
+    onSaveSequence: (String) -> Unit
+) {
+    var firstSequence by remember { mutableStateOf("") }
+    var confirmSequence by remember { mutableStateOf("") }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Calculate,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = {
+            Text(
+                text = "Calculator Secret Sequence",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Enter a 4 to 8 digit secret sequence. In the calculator, typing these digits followed by '=' will trigger your Master PIN / Fingerprint prompt to unlock the Vault.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                OutlinedTextField(
+                    value = firstSequence,
+                    onValueChange = { input ->
+                        val digitsOnly = input.filter { it.isDigit() }.take(8)
+                        firstSequence = digitsOnly
+                        errorMsg = null
+                    },
+                    label = { Text("Secret Digits (4–8 digits)") },
+                    suffix = { Text("=", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                    singleLine = true,
+                    isError = errorMsg != null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("calc_secret_first_input")
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = confirmSequence,
+                    onValueChange = { input ->
+                        val digitsOnly = input.filter { it.isDigit() }.take(8)
+                        confirmSequence = digitsOnly
+                        errorMsg = null
+                    },
+                    label = { Text("Confirm Secret Digits") },
+                    suffix = { Text("=", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                    singleLine = true,
+                    isError = errorMsg != null,
+                    supportingText = {
+                        if (errorMsg != null) {
+                            Text(errorMsg ?: "", color = MaterialTheme.colorScheme.error)
+                        } else {
+                            Text("Trigger preview: ${if (firstSequence.isNotEmpty()) "${firstSequence}=" else "e.g. 1984="}")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("calc_secret_confirm_input")
+                )
+            }
+        },
+        confirmButton = {
+            NeoButton(
+                text = "Save Sequence",
+                isPrimaryGlowing = true,
+                shape = NeoShapes.SmallControl,
+                onClick = {
+                    if (firstSequence.length < 4) {
+                        errorMsg = "Secret sequence must be at least 4 digits"
+                        return@NeoButton
+                    }
+                    if (firstSequence != confirmSequence) {
+                        errorMsg = "Sequences do not match"
+                        return@NeoButton
+                    }
+                    onSaveSequence(firstSequence)
+                },
+                modifier = Modifier.testTag("calc_secret_save_button")
+            )
+        },
+        dismissButton = {
+            NeoButton(
+                text = "Cancel",
+                shape = NeoShapes.SmallControl,
+                onClick = onDismiss
+            )
+        }
+    )
+}
+

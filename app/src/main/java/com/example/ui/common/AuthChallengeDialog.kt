@@ -76,8 +76,12 @@ fun AuthChallengeDialog(
                 onSuccess = {
                     onAuthorized()
                 },
-                onError = { _, _ ->
-                    // Fall back to on-screen PIN gracefully
+                onError = { errorCode, _ ->
+                    if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
+                        errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
+                    ) {
+                        errorMsg = "Fingerprint sensor locked. Please use PIN."
+                    }
                 }
             )
         }
@@ -192,15 +196,16 @@ fun AuthChallengeDialog(
                     lockoutSeconds = lockoutSeconds,
                     extraLeftAction = {
                         if (isBiometricEnabled) {
-                            IconButton(
+                            NeoCircularButton(
                                 onClick = { triggerBiometric() },
+                                size = 56.dp,
                                 modifier = Modifier.testTag("auth_challenge_biometric_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Fingerprint,
                                     contentDescription = "Authenticate with Fingerprint",
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
                             }
                         }
@@ -210,12 +215,12 @@ fun AuthChallengeDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(
+            NeoButton(
+                text = "Cancel",
+                shape = NeoShapes.SmallControl,
                 onClick = onDismiss,
                 modifier = Modifier.testTag("auth_challenge_cancel_button")
-            ) {
-                Text("Cancel")
-            }
+            )
         }
     )
 }

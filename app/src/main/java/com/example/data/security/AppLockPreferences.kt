@@ -37,6 +37,11 @@ class AppLockPreferences(context: Context) {
         private const val KEY_FAILED_ATTEMPTS = "failed_attempts"
         private const val KEY_LOCKOUT_UNTIL_TIMESTAMP = "lockout_until_timestamp"
 
+        private const val KEY_CALCULATOR_DISGUISE_ENABLED = "calculator_disguise_enabled"
+        private const val KEY_CALC_SECRET_HASH = "calc_secret_hash"
+        private const val KEY_CALC_SECRET_SALT = "calc_secret_salt"
+        private const val KEY_CALC_SECRET_LENGTH = "calc_secret_length"
+
         const val MAX_FAILED_ATTEMPTS = 5
         const val LOCKOUT_DURATION_MS = 30_000L // 30 seconds
     }
@@ -236,6 +241,59 @@ class AppLockPreferences(context: Context) {
         } else {
             0
         }
+    }
+
+    // --- Calculator Disguise & Secret Gateway ---
+
+    /**
+     * Checks whether a secret sequence has been configured for the Calculator Disguise.
+     */
+    fun isCalculatorSecretConfigured(): Boolean {
+        val hash = prefs.getString(KEY_CALC_SECRET_HASH, null)
+        val salt = prefs.getString(KEY_CALC_SECRET_SALT, null)
+        return !hash.isNullOrEmpty() && !salt.isNullOrEmpty()
+    }
+
+    /**
+     * Saves the numeric secret sequence (4–8 digits) as a salted SHA-256 hash.
+     * Never stores plaintext secret sequences.
+     */
+    fun saveCalculatorSecretSequence(sequenceDigits: String) {
+        val trimmed = sequenceDigits.trim()
+        require(trimmed.length in 4..8 && trimmed.all { it.isDigit() }) {
+            "Secret sequence must be 4 to 8 digits"
+        }
+        val saltedHash = PinHashUtil.createSaltedHash(trimmed)
+        prefs.edit()
+            .putString(KEY_CALC_SECRET_SALT, saltedHash.salt)
+            .putString(KEY_CALC_SECRET_HASH, saltedHash.hash)
+            .putInt(KEY_CALC_SECRET_LENGTH, trimmed.length)
+            .apply()
+    }
+
+    fun getCalculatorSecretLength(): Int {
+        return prefs.getInt(KEY_CALC_SECRET_LENGTH, 4)
+    }
+
+    /**
+     * Verifies candidate digits against the stored calculator secret hash using constant-time comparison.
+     */
+    fun verifyCalculatorSecretSequence(candidateDigits: String): Boolean {
+        if (candidateDigits.isEmpty()) return false
+        val hash = prefs.getString(KEY_CALC_SECRET_HASH, null) ?: return false
+        val salt = prefs.getString(KEY_CALC_SECRET_SALT, null) ?: return false
+        return PinHashUtil.verifyPin(candidateDigits, salt, hash)
+    }
+
+    /**
+     * Returns true only if Calculator Disguise is enabled AND a secret sequence is configured.
+     */
+    fun isCalculatorDisguiseEnabled(): Boolean {
+        return prefs.getBoolean(KEY_CALCULATOR_DISGUISE_ENABLED, false) && isCalculatorSecretConfigured()
+    }
+
+    fun setCalculatorDisguiseEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CALCULATOR_DISGUISE_ENABLED, enabled).apply()
     }
 
     /**

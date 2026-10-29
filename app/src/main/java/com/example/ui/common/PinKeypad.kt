@@ -183,20 +183,12 @@ fun PinKeypad(
                 modifier = Modifier.testTag("pin_key_0")
             )
 
-            Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        enabled = !isLockedOut,
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true, radius = 36.dp)
-                    ) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onDeleteClick()
-                    }
-                    .testTag("pin_delete_button"),
-                contentAlignment = Alignment.Center
+            NeoCircularButton(
+                onClick = onDeleteClick,
+                enabled = !isLockedOut,
+                size = 72.dp,
+                backgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.testTag("pin_delete_button")
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Backspace,
@@ -217,25 +209,19 @@ private fun KeypadButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    NeoCircularButton(
         onClick = onClick,
         enabled = enabled,
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.8f else 0.3f),
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        tonalElevation = 2.dp,
-        modifier = modifier.size(72.dp)
+        size = 72.dp,
+        backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = modifier
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(72.dp)
-        ) {
-            Text(
-                text = text,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center
-            )
-        }
+        Text(
+            text = text,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
     }
 }

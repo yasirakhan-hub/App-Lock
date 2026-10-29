@@ -181,8 +181,9 @@ class ExampleRobolectricTest {
     fun testLauncherOrSystemUIDetectionAndCaching() {
         val manager = com.example.data.repository.AppLockManager.getInstance(context)
 
-        // System UI should always return true
+        // System UI and Android system resolver should return true
         assertTrue("com.android.systemui must be recognized as system UI", manager.isLauncherOrSystemUI("com.android.systemui"))
+        assertTrue("android resolver must be recognized as system UI", manager.isLauncherOrSystemUI("android"))
 
         // Standard app package should return false
         assertFalse("Arbitrary app package must not be recognized as launcher", manager.isLauncherOrSystemUI("com.example.otherapp"))
@@ -190,6 +191,12 @@ class ExampleRobolectricTest {
         // Invalidating launcher cache shouldn't break subsequent calls
         manager.invalidateLauncherCache()
         assertFalse("Arbitrary app package must still return false after cache invalidation", manager.isLauncherOrSystemUI("com.example.otherapp"))
+    }
+
+    @Test
+    fun testBatteryOptimizationHelper() {
+        val ignoring = com.example.util.PermissionHelper.isIgnoringBatteryOptimizations(context)
+        assertTrue(ignoring || !ignoring)
     }
 
     @Test

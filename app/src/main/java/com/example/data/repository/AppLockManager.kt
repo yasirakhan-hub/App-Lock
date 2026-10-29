@@ -230,6 +230,7 @@ class AppLockManager private constructor(private val context: Context) {
      */
     fun isLauncherOrSystemUI(packageName: String): Boolean {
         if (packageName == "com.android.systemui") return true
+        if (packageName == "android") return true
 
         val launcherPkg = cachedLauncherPackage ?: synchronized(this) {
             cachedLauncherPackage ?: try {
@@ -243,7 +244,16 @@ class AppLockManager private constructor(private val context: Context) {
             }
         }
 
-        return packageName == launcherPkg
+        if (packageName == launcherPkg) return true
+
+        // Fallback check: check if the package explicitly provides a CATEGORY_HOME launcher activity
+        return try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(packageName)
+            val activities = context.packageManager.queryIntentActivities(homeIntent, 0)
+            activities.isNotEmpty()
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**

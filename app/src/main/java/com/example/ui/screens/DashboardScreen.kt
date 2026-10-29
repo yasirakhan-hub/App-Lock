@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Info
@@ -67,6 +69,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.AppLockManager
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
+import com.example.ui.common.NeoStatusBadge
 import com.example.util.DeviceAdminHelper
 import com.example.util.PermissionHelper
 
@@ -79,6 +86,8 @@ fun DashboardScreen(
     onNavigateToAppSelection: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToTestLock: () -> Unit,
+    onNavigateToVault: () -> Unit = {},
+    onNavigateToCalculator: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -171,28 +180,21 @@ fun DashboardScreen(
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
             // Master Protection Toggle Card
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isProtectionEnabled) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    }
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (isProtectionEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                ),
+            NeoCard(
+                shape = NeoShapes.LargeCard,
+                backgroundColor = if (isProtectionEnabled) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                },
+                accentBorder = if (isProtectionEnabled) NeoPalette.PrimaryCyan.copy(alpha = 0.6f) else null,
+                elevation = if (isProtectionEnabled) 6.dp else 2.dp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("master_protection_card")
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -321,50 +323,50 @@ fun DashboardScreen(
 
             if (!isSettingsAppProtected) {
                 Spacer(modifier = Modifier.height(12.dp))
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)),
+                NeoCard(
+                    shape = NeoShapes.MediumCard,
+                    backgroundColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f),
+                    accentBorder = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f),
                     modifier = Modifier.fillMaxWidth().testTag("protect_settings_card")
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Security,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Block Force-Stop Bypass",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "To completely prevent intruders from tapping 'Force Stop', lock the Android Settings app. They will not be able to open App Info without your master PIN.",
-                            style = MaterialTheme.typography.bodySmall,
+                            text = "Block Force-Stop Bypass",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onTertiaryContainer
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Button(
-                            onClick = {
-                                prefs.setPackageProtected("com.android.settings", true)
-                                isSettingsAppProtected = true
-                                protectedCount = prefs.getProtectedPackages().size
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.tertiary,
-                                contentColor = MaterialTheme.colorScheme.onTertiary
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.align(Alignment.End)
-                        ) {
-                            Text("Lock Android Settings Now", style = MaterialTheme.typography.labelMedium)
-                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "To completely prevent intruders from tapping 'Force Stop', lock the Android Settings app. They will not be able to open App Info without your master PIN.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    NeoButton(
+                        onClick = {
+                            prefs.setPackageProtected("com.android.settings", true)
+                            isSettingsAppProtected = true
+                            protectedCount = prefs.getProtectedPackages().size
+                        },
+                        shape = NeoShapes.SmallControl,
+                        isPrimaryGlowing = false,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(
+                            text = "Lock Android Settings Now",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -392,6 +394,26 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             ActionNavRow(
+                title = "Encrypted File Vault",
+                subtitle = "Privately hide photos, videos & sensitive documents",
+                icon = Icons.Default.Lock,
+                onClick = onNavigateToVault,
+                testTag = "nav_vault"
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ActionNavRow(
+                title = "Calculator Disguise & Vault",
+                subtitle = "Open tactile calculator or test secret vault gateway",
+                icon = Icons.Default.Calculate,
+                onClick = onNavigateToCalculator,
+                testTag = "nav_calculator"
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ActionNavRow(
                 title = "Interactive Lock Test",
                 subtitle = "Verify PIN entry behavior in safe simulation mode",
                 icon = Icons.Default.PlayCircle,
@@ -412,10 +434,11 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Relock all sessions button
-            OutlinedButton(
+            NeoButton(
                 onClick = {
                     appLockManager.lockAll()
                 },
+                shape = NeoShapes.MediumCard,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("relock_all_button")
@@ -423,10 +446,15 @@ fun DashboardScreen(
                 Icon(
                     imageVector = Icons.Default.LockReset,
                     contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Relock All Sessions Now")
+                Text(
+                    text = "Relock All Sessions Now",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
@@ -440,34 +468,31 @@ private fun StatCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Card(
+    NeoCard(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+        shape = NeoShapes.LargeCard,
+        backgroundColor = MaterialTheme.colorScheme.surface,
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -480,78 +505,66 @@ private fun PermissionStatusCard(
     onAction: () -> Unit,
     testTag: String
 ) {
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (isGranted) MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-            else MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
-        ),
+    NeoCard(
+        shape = NeoShapes.MediumCard,
+        backgroundColor = MaterialTheme.colorScheme.surface,
+        accentBorder = if (!isGranted) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else null,
         modifier = Modifier
             .fillMaxWidth()
             .testTag(testTag)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier.weight(1f)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = if (isGranted) Icons.Default.CheckCircle else Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = if (isGranted) Color(0xFF10B981) else Color(0xFFF59E0B),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isGranted) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFFF59E0B).copy(alpha = 0.15f)
-                ) {
-                    Text(
-                        text = if (isGranted) "Enabled" else "Required",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isGranted) Color(0xFF10B981) else Color(0xFFF59E0B),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
+                Icon(
+                    imageVector = if (isGranted) Icons.Default.CheckCircle else Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = if (isGranted) Color(0xFF10B981) else Color(0xFFF59E0B),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            NeoStatusBadge(
+                text = if (isGranted) "Enabled" else "Required",
+                isActive = isGranted
             )
+        }
 
-            if (!isGranted) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Button(
-                    onClick = onAction,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text(actionLabel, style = MaterialTheme.typography.labelMedium)
-                }
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        if (!isGranted) {
+            Spacer(modifier = Modifier.height(12.dp))
+            NeoButton(
+                onClick = onAction,
+                isPrimaryGlowing = true,
+                shape = NeoShapes.SmallControl,
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Text(
+                    text = actionLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
             }
         }
     }
@@ -565,24 +578,22 @@ private fun ActionNavRow(
     onClick: () -> Unit,
     testTag: String
 ) {
-    Card(
+    NeoCard(
         onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+        shape = NeoShapes.MediumCard,
+        backgroundColor = MaterialTheme.colorScheme.surface,
         modifier = Modifier
             .fillMaxWidth()
             .testTag(testTag)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                 modifier = Modifier.size(40.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {

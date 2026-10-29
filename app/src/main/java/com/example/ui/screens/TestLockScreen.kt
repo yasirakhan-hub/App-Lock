@@ -1,8 +1,9 @@
 package com.example.ui.screens
 
 import android.content.Intent
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,19 +17,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Science
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,12 +42,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
+import com.example.ui.common.NeoStatusBadge
 import com.example.ui.lock.LockActivity
 
 data class TestAppProfile(
@@ -126,19 +129,25 @@ fun TestLockScreen(
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(64.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Science,
-                        contentDescription = "Test Simulator",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .shadow(8.dp, CircleShape, spotColor = NeoPalette.PrimaryCyan)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(NeoPalette.SurfaceElevated, NeoPalette.SurfaceDark)
+                        )
                     )
-                }
+                    .border(1.5.dp, NeoPalette.PrimaryCyan.copy(alpha = 0.6f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Science,
+                    contentDescription = "Test Simulator",
+                    tint = NeoPalette.PrimaryCyan,
+                    modifier = Modifier.size(34.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -170,41 +179,37 @@ fun TestLockScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             // Test profiles list
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 testProfiles.forEach { profile ->
                     val isSelected = selectedProfile.id == profile.id
-                    Card(
+                    NeoCard(
                         onClick = { selectedProfile = profile },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                            else MaterialTheme.colorScheme.surface
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                        ),
+                        shape = NeoShapes.MediumCard,
+                        accentBorder = if (isSelected) NeoPalette.PrimaryCyan else null,
+                        elevation = if (isSelected) 6.dp else 3.dp,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("test_profile_${profile.id}")
                     ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Surface(
                                 shape = CircleShape,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                color = if (isSelected) NeoPalette.PrimaryCyan else NeoPalette.SurfaceLight,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isSelected) Color.White.copy(alpha = 0.4f) else NeoPalette.SpecularBorder
+                                ),
                                 modifier = Modifier.size(44.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = profile.icon,
                                         contentDescription = null,
-                                        tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(24.dp)
+                                        tint = if (isSelected) Color.White else NeoPalette.PrimaryCyan,
+                                        modifier = Modifier.size(22.dp)
                                     )
                                 }
                             }
@@ -225,11 +230,9 @@ fun TestLockScreen(
                             }
 
                             if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = "Selected",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
+                                NeoStatusBadge(
+                                    text = "Active Target",
+                                    color = NeoPalette.PrimaryCyan
                                 )
                             }
                         }
@@ -239,7 +242,10 @@ fun TestLockScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            Button(
+            NeoButton(
+                text = "Launch Lock Screen Simulation",
+                icon = Icons.Default.PlayArrow,
+                isPrimaryGlowing = true,
                 onClick = {
                     val intent = Intent(context, LockActivity::class.java).apply {
                         putExtra(LockActivity.EXTRA_TARGET_PACKAGE, selectedProfile.packageName)
@@ -248,16 +254,11 @@ fun TestLockScreen(
                     }
                     context.startActivity(intent)
                 },
-                shape = RoundedCornerShape(12.dp),
+                shape = NeoShapes.MediumCard,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
                     .testTag("launch_simulation_button")
-            ) {
-                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Launch Lock Screen Simulation", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            }
+            )
         }
     }
 }

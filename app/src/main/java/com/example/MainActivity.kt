@@ -8,6 +8,9 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,10 +25,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,16 +35,27 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.example.data.repository.AppLockManager
+import com.example.ui.common.NeoCircularButton
+import com.example.ui.common.NeoPalette
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
 import com.example.ui.screens.AppSelectionScreen
@@ -59,10 +71,41 @@ import kotlinx.coroutines.launch
 enum class ScreenState {
     AUTH_GATE,
     ONBOARDING,
+    CALCULATOR_GATEWAY,
     DASHBOARD,
     APP_SELECTION,
     SETTINGS,
-    TEST_LOCK
+    TEST_LOCK,
+    VAULT
+}
+
+class MainNavigationViewModel(private val savedStateHandle: SavedStateHandle) : ViewModel() {
+    companion object {
+        private const val KEY_CURRENT_SCREEN = "nav_current_screen"
+        private const val KEY_OPENED_CALC_FROM_DASHBOARD = "nav_opened_calc_from_dashboard"
+    }
+
+    fun getOrInitScreen(initialProvider: () -> ScreenState): ScreenState {
+        val savedName = savedStateHandle.get<String>(KEY_CURRENT_SCREEN)
+        if (savedName != null) {
+            runCatching { return ScreenState.valueOf(savedName) }
+        }
+        val initial = initialProvider()
+        savedStateHandle[KEY_CURRENT_SCREEN] = initial.name
+        return initial
+    }
+
+    fun setScreen(screen: ScreenState) {
+        savedStateHandle[KEY_CURRENT_SCREEN] = screen.name
+    }
+
+    fun getOpenedCalcFromDashboard(): Boolean {
+        return savedStateHandle.get<Boolean>(KEY_OPENED_CALC_FROM_DASHBOARD) ?: false
+    }
+
+    fun setOpenedCalcFromDashboard(opened: Boolean) {
+        savedStateHandle[KEY_OPENED_CALC_FROM_DASHBOARD] = opened
+    }
 }
 
 class MainActivity : FragmentActivity() {
@@ -73,10 +116,11 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         appLockManager = AppLockManager.getInstance(this)
+        val navViewModel = ViewModelProvider(this)[MainNavigationViewModel::class.java]
 
         setContent {
             val systemInDark = androidx.compose.foundation.isSystemInDarkTheme()
-            var darkThemeOverride by remember {
+            var darkThemeOverride by rememberSaveable {
                 mutableStateOf(appLockManager.preferences.isDarkThemeOverride())
             }
             val isDarkTheme = darkThemeOverride ?: systemInDark
@@ -84,6 +128,7 @@ class MainActivity : FragmentActivity() {
             AppLockTheme(darkTheme = isDarkTheme) {
                 MainAppNavHost(
                     appLockManager = appLockManager,
+                    navViewModel = navViewModel,
                     isDarkTheme = isDarkTheme,
                     onToggleTheme = {
                         val next = !isDarkTheme
@@ -99,18 +144,62 @@ class MainActivity : FragmentActivity() {
 @Composable
 fun MainAppNavHost(
     appLockManager: AppLockManager,
+    navViewModel: MainNavigationViewModel? = null,
     isDarkTheme: Boolean = false,
     onToggleTheme: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val prefs = appLockManager.preferences
-    var currentScreen by remember {
+
+    var openedCalculatorFromDashboard by rememberSaveable {
+        mutableStateOf(navViewModel?.getOpenedCalcFromDashboard() ?: false)
+    }
+    var currentScreen by rememberSaveable {
         mutableStateOf(
-            if (!prefs.isPinConfigured()) {
-                ScreenState.ONBOARDING
-            } else {
-                ScreenState.AUTH_GATE
+            navViewModel?.getOrInitScreen {
+                when {
+                    !prefs.isPinConfigured() -> ScreenState.ONBOARDING
+                    prefs.isCalculatorDisguiseEnabled() -> ScreenState.CALCULATOR_GATEWAY
+                    else -> ScreenState.AUTH_GATE
+                }
+            } ?: when {
+                !prefs.isPinConfigured() -> ScreenState.ONBOARDING
+                prefs.isCalculatorDisguiseEnabled() -> ScreenState.CALCULATOR_GATEWAY
+                else -> ScreenState.AUTH_GATE
             }
         )
+    }
+
+    fun navigateTo(screen: ScreenState, calcFromDashboard: Boolean = openedCalculatorFromDashboard) {
+        openedCalculatorFromDashboard = calcFromDashboard
+        currentScreen = screen
+        navViewModel?.setOpenedCalcFromDashboard(calcFromDashboard)
+        navViewModel?.setScreen(screen)
+    }
+
+    // Relock Smart AppLock & Vault session automatically if screen turns off
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                val activity = context as? android.app.Activity
+                val isChangingConfigs = activity?.isChangingConfigurations == true
+                val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                val isScreenOff = powerManager != null && !powerManager.isInteractive
+                if (!isChangingConfigs && isScreenOff && prefs.isRelockOnScreenOff() && prefs.isPinConfigured()) {
+                    val target = if (prefs.isCalculatorDisguiseEnabled()) {
+                        ScreenState.CALCULATOR_GATEWAY
+                    } else {
+                        ScreenState.AUTH_GATE
+                    }
+                    navigateTo(target, calcFromDashboard = false)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     AnimatedContent(
@@ -122,49 +211,91 @@ fun MainAppNavHost(
             ScreenState.AUTH_GATE -> {
                 DashboardAuthGate(
                     appLockManager = appLockManager,
-                    onUnlockSuccess = { currentScreen = ScreenState.DASHBOARD }
+                    onUnlockSuccess = { navigateTo(ScreenState.DASHBOARD) }
                 )
             }
 
             ScreenState.ONBOARDING -> {
                 OnboardingSetupScreen(
                     preferences = prefs,
-                    onSetupComplete = { currentScreen = ScreenState.DASHBOARD }
+                    onSetupComplete = { navigateTo(ScreenState.DASHBOARD) }
+                )
+            }
+
+            ScreenState.CALCULATOR_GATEWAY -> {
+                if (openedCalculatorFromDashboard) {
+                    BackHandler {
+                        navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false)
+                    }
+                }
+                com.example.ui.calculator.CalculatorVaultScreen(
+                    preferences = prefs,
+                    isStandaloneDisguiseMode = !openedCalculatorFromDashboard,
+                    onGatewayUnlocked = {
+                        navigateTo(ScreenState.VAULT, calcFromDashboard = false)
+                    },
+                    onNavigateBack = if (openedCalculatorFromDashboard) {
+                        {
+                            navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false)
+                        }
+                    } else null
                 )
             }
 
             ScreenState.DASHBOARD -> {
+                if (prefs.isCalculatorDisguiseEnabled()) {
+                    BackHandler {
+                        navigateTo(ScreenState.CALCULATOR_GATEWAY, calcFromDashboard = false)
+                    }
+                }
                 DashboardScreen(
                     appLockManager = appLockManager,
                     isDarkTheme = isDarkTheme,
                     onToggleTheme = onToggleTheme,
-                    onNavigateToAppSelection = { currentScreen = ScreenState.APP_SELECTION },
-                    onNavigateToSettings = { currentScreen = ScreenState.SETTINGS },
-                    onNavigateToTestLock = { currentScreen = ScreenState.TEST_LOCK }
+                    onNavigateToAppSelection = { navigateTo(ScreenState.APP_SELECTION) },
+                    onNavigateToSettings = { navigateTo(ScreenState.SETTINGS) },
+                    onNavigateToTestLock = { navigateTo(ScreenState.TEST_LOCK) },
+                    onNavigateToVault = { navigateTo(ScreenState.VAULT) },
+                    onNavigateToCalculator = {
+                        navigateTo(ScreenState.CALCULATOR_GATEWAY, calcFromDashboard = true)
+                    }
                 )
             }
 
             ScreenState.APP_SELECTION -> {
-                BackHandler { currentScreen = ScreenState.DASHBOARD }
+                BackHandler { navigateTo(ScreenState.DASHBOARD) }
                 AppSelectionScreen(
                     preferences = prefs,
-                    onNavigateBack = { currentScreen = ScreenState.DASHBOARD }
+                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) }
                 )
             }
 
             ScreenState.SETTINGS -> {
-                BackHandler { currentScreen = ScreenState.DASHBOARD }
+                BackHandler { navigateTo(ScreenState.DASHBOARD) }
                 SettingsScreen(
                     preferences = prefs,
-                    onNavigateBack = { currentScreen = ScreenState.DASHBOARD },
-                    onResetCompleted = { currentScreen = ScreenState.ONBOARDING }
+                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) },
+                    onResetCompleted = { navigateTo(ScreenState.ONBOARDING, calcFromDashboard = false) }
                 )
             }
 
             ScreenState.TEST_LOCK -> {
-                BackHandler { currentScreen = ScreenState.DASHBOARD }
+                BackHandler { navigateTo(ScreenState.DASHBOARD) }
                 TestLockScreen(
-                    onNavigateBack = { currentScreen = ScreenState.DASHBOARD }
+                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) }
+                )
+            }
+
+            ScreenState.VAULT -> {
+                val returnScreen = if (prefs.isCalculatorDisguiseEnabled()) {
+                    ScreenState.CALCULATOR_GATEWAY
+                } else {
+                    ScreenState.DASHBOARD
+                }
+                BackHandler { navigateTo(returnScreen, calcFromDashboard = false) }
+                com.example.ui.vault.VaultScreen(
+                    onNavigateBack = { navigateTo(returnScreen, calcFromDashboard = false) },
+                    onOpenDashboard = { navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false) }
                 )
             }
         }
@@ -184,6 +315,7 @@ fun DashboardAuthGate(
     val prefs = appLockManager.preferences
     val pinLength = prefs.getPinLength()
     val scope = rememberCoroutineScope()
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
     var enteredPin by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
@@ -206,8 +338,12 @@ fun DashboardAuthGate(
                     prefs.resetFailedAttempts()
                     onUnlockSuccess()
                 },
-                onError = { _, _ ->
-                    // Graceful fallback to PIN
+                onError = { errorCode, _ ->
+                    if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
+                        errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
+                    ) {
+                        errorMsg = "Fingerprint sensor locked. Please use PIN."
+                    }
                 }
             )
         }
@@ -240,19 +376,29 @@ fun DashboardAuthGate(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Spacer(modifier = Modifier.height(36.dp))
 
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(72.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Shield,
-                            contentDescription = "Security Shield",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(38.dp)
+                Box(
+                    modifier = Modifier
+                        .size(76.dp)
+                        .shadow(8.dp, CircleShape, spotColor = NeoPalette.PrimaryCyan)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                if (isDarkTheme) {
+                                    listOf(NeoPalette.SurfaceElevated, NeoPalette.SurfaceDark)
+                                } else {
+                                    listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
+                                }
+                            )
                         )
-                    }
+                        .border(1.5.dp, NeoPalette.PrimaryCyan.copy(alpha = 0.6f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shield,
+                        contentDescription = "Security Shield",
+                        tint = NeoPalette.PrimaryCyan,
+                        modifier = Modifier.size(38.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -332,15 +478,17 @@ fun DashboardAuthGate(
                 lockoutSeconds = lockoutSeconds,
                 extraLeftAction = {
                     if (isBiometricEnabled) {
-                        IconButton(
+                        NeoCircularButton(
                             onClick = { triggerBiometricPrompt() },
+                            size = 56.dp,
+                            accentGlow = NeoPalette.PrimaryCyan.copy(alpha = 0.45f),
                             modifier = Modifier.testTag("dashboard_biometric_trigger_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Fingerprint,
                                 contentDescription = "Unlock with Fingerprint",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(34.dp)
+                                tint = NeoPalette.PrimaryCyan,
+                                modifier = Modifier.size(30.dp)
                             )
                         }
                     }

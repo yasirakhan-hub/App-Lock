@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,32 +18,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -55,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +57,12 @@ import com.example.data.model.AppInfo
 import com.example.data.repository.AppDiscoveryRepository
 import com.example.data.security.AppLockPreferences
 import com.example.ui.common.AuthChallengeDialog
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoInsetBox
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
+import com.example.ui.common.NeoStatusBadge
 import kotlinx.coroutines.launch
 
 private enum class FilterTab {
@@ -155,65 +153,101 @@ fun AppSelectionScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp)
         ) {
-            // Search Field
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Search installed apps...") },
-                leadingIcon = {
-                    Icon(imageVector = Icons.Default.Search, contentDescription = "Search")
-                },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(imageVector = Icons.Default.Clear, contentDescription = "Clear")
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+            // Search Field (NeoInsetBox owns its internal padding)
+            NeoInsetBox(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("app_search_field")
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Filter Tabs & Batch Actions
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .height(52.dp)
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = currentFilter == FilterTab.ALL,
-                        onClick = { currentFilter = FilterTab.ALL },
-                        label = { Text("All (${apps.size})") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
                     )
-                    FilterChip(
-                        selected = currentFilter == FilterTab.PROTECTED,
-                        onClick = { currentFilter = FilterTab.PROTECTED },
-                        label = { Text("Locked ($protectedCount)") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("app_search_field"),
+                        decorationBox = { innerTextField ->
+                            if (searchQuery.isEmpty()) {
+                                Text(
+                                    "Search installed apps...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
+                            innerTextField()
+                        }
                     )
-                    FilterChip(
-                        selected = currentFilter == FilterTab.UNPROTECTED,
-                        onClick = { currentFilter = FilterTab.UNPROTECTED },
-                        label = { Text("Unlocked (${apps.size - protectedCount})") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    )
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { searchQuery = "" },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = "Clear",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Neomorphic Segmented Filter Bar
+            NeoInsetBox(
+                shape = NeoShapes.MediumCard,
+                contentPadding = PaddingValues(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val tabs = listOf(
+                        Triple(FilterTab.ALL, "All (${apps.size})", "filter_all"),
+                        Triple(FilterTab.PROTECTED, "Locked ($protectedCount)", "filter_protected"),
+                        Triple(FilterTab.UNPROTECTED, "Unlocked (${apps.size - protectedCount})", "filter_unprotected")
+                    )
+                    tabs.forEach { (tab, label, tag) ->
+                        val isSelected = currentFilter == tab
+                        NeoButton(
+                            onClick = { currentFilter = tab },
+                            isPrimaryGlowing = isSelected,
+                            shape = NeoShapes.SmallControl,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag(tag)
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             // App List
             if (isLoading) {
@@ -246,7 +280,7 @@ fun AppSelectionScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(filteredApps, key = { it.packageName }) { app ->
                         AppListItem(
@@ -298,14 +332,17 @@ fun AppSelectionScreen(
                         tint = MaterialTheme.colorScheme.error
                     )
                 },
-                title = { Text("Critical Component Warning") },
+                title = { Text("Critical Component Warning", fontWeight = FontWeight.Bold) },
                 text = {
                     Text(
                         "Locking ${criticalApp.name} (${criticalApp.packageName}) may interfere with normal device operation or navigation. Are you sure you want to protect it?"
                     )
                 },
                 confirmButton = {
-                    Button(
+                    NeoButton(
+                        text = "Lock Anyway",
+                        isDestructive = true,
+                        shape = NeoShapes.SmallControl,
                         onClick = {
                             preferences.setPackageProtected(criticalApp.packageName, true)
                             apps = apps.map {
@@ -314,14 +351,14 @@ fun AppSelectionScreen(
                             }
                             pendingCriticalAppToLock = null
                         }
-                    ) {
-                        Text("Lock Anyway")
-                    }
+                    )
                 },
                 dismissButton = {
-                    TextButton(onClick = { pendingCriticalAppToLock = null }) {
-                        Text("Cancel")
-                    }
+                    NeoButton(
+                        text = "Cancel",
+                        shape = NeoShapes.SmallControl,
+                        onClick = { pendingCriticalAppToLock = null }
+                    )
                 }
             )
         }
@@ -333,25 +370,16 @@ private fun AppListItem(
     app: AppInfo,
     onToggleProtection: (Boolean) -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (app.isProtected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            else MaterialTheme.colorScheme.surface
-        ),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (app.isProtected) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
-            else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
-        ),
+    NeoCard(
+        shape = NeoShapes.MediumCard,
+        accentBorder = if (app.isProtected) NeoPalette.PrimaryCyan.copy(alpha = 0.55f) else null,
+        elevation = if (app.isProtected) 5.dp else 2.dp,
         modifier = Modifier
             .fillMaxWidth()
             .testTag("app_row_${app.packageName}")
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // App Icon
@@ -393,19 +421,10 @@ private fun AppListItem(
                     )
                     if (app.isCriticalSystemComponent) {
                         Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
-                        ) {
-                            Text(
-                                text = "System",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
+                        NeoStatusBadge(
+                            text = "System",
+                            color = NeoPalette.ErrorRed
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(2.dp))

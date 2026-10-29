@@ -8,7 +8,17 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCircularButton
+import com.example.ui.common.NeoInsetBox
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
+import com.example.ui.common.NeoStatusBadge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -184,8 +194,12 @@ class LockActivity : FragmentActivity() {
                     onSuccess = {
                         onUnlockSuccess()
                     },
-                    onError = { _, _ ->
-                        // Fallback to PIN silently
+                    onError = { errorCode, _ ->
+                        if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
+                            errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
+                        ) {
+                            errorMessage = "Fingerprint sensor locked. Please use PIN."
+                        }
                     }
                 )
             }
@@ -224,27 +238,34 @@ class LockActivity : FragmentActivity() {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
                     if (isTestMode) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        ) {
-                            Text(
-                                text = "SIMULATION TEST MODE",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                        }
+                        NeoStatusBadge(
+                            text = "SIMULATION TEST MODE",
+                            color = NeoPalette.PrimaryCyan,
+                            modifier = Modifier.padding(bottom = 10.dp)
+                        )
                     }
 
                     Box(
                         modifier = Modifier
-                            .size(68.dp)
+                            .size(76.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                            .background(
+                                Brush.radialGradient(
+                                    colors = if (isDarkTheme) {
+                                        listOf(NeoPalette.SurfaceLight, NeoPalette.SurfaceDark)
+                                    } else {
+                                        listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
+                                    }
+                                )
+                            )
+                            .border(
+                                1.5.dp,
+                                if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant,
+                                CircleShape
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         if (targetAppIcon != null) {
@@ -257,7 +278,7 @@ class LockActivity : FragmentActivity() {
                             Image(
                                 painter = painterResource(id = R.drawable.ic_applock_shield_logo),
                                 contentDescription = "Locked",
-                                modifier = Modifier.size(42.dp)
+                                modifier = Modifier.size(44.dp)
                             )
                         }
                     }
@@ -346,26 +367,29 @@ class LockActivity : FragmentActivity() {
                     extraLeftAction = {
                         if (isBiometricEnabled) {
                             // Fingerprint button to re-trigger BiometricPrompt
-                            IconButton(
+                            NeoCircularButton(
                                 onClick = { triggerBiometricPrompt() },
+                                size = 60.dp,
                                 modifier = Modifier.testTag("biometric_trigger_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Fingerprint,
                                     contentDescription = "Unlock with Fingerprint",
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(34.dp)
+                                    modifier = Modifier.size(32.dp)
                                 )
                             }
                         } else if (prefs.hasRecoveryQuestion()) {
-                            IconButton(
+                            NeoCircularButton(
                                 onClick = { showRecoveryDialog = true },
+                                size = 60.dp,
                                 modifier = Modifier.testTag("forgot_pin_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.HelpOutline,
                                     contentDescription = "Forgot PIN",
-                                    tint = MaterialTheme.colorScheme.primary
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(28.dp)
                                 )
                             }
                         }
@@ -445,17 +469,15 @@ class LockActivity : FragmentActivity() {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(12.dp))
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp),
+                    NeoInsetBox(
+                        shape = NeoShapes.SmallControl,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = securityQuestion,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(12.dp)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Spacer(modifier = Modifier.height(12.dp))
@@ -483,7 +505,10 @@ class LockActivity : FragmentActivity() {
                 }
             },
             confirmButton = {
-                Button(
+                NeoButton(
+                    text = "Unlock",
+                    isPrimaryGlowing = true,
+                    shape = NeoShapes.SmallControl,
                     onClick = {
                         if (onVerifyAnswer(answerText)) {
                             // Verified
@@ -492,14 +517,14 @@ class LockActivity : FragmentActivity() {
                         }
                     },
                     modifier = Modifier.testTag("recovery_submit_button")
-                ) {
-                    Text("Unlock")
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = onDismiss) {
-                    Text("Cancel")
-                }
+                NeoButton(
+                    text = "Cancel",
+                    shape = NeoShapes.SmallControl,
+                    onClick = onDismiss
+                )
             }
         )
     }

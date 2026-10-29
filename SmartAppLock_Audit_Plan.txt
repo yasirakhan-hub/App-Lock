@@ -1,0 +1,406 @@
+================================================================================
+SMART APPLOCK — COMPREHENSIVE REPOSITORY AUDIT AND IMPLEMENTATION PLAN
+================================================================================
+
+PROJECT IDENTITY & METADATA
+--------------------------------------------------------------------------------
+App Display Name:       Smart AppLock
+Application ID / Pkg:   com.aistudio.applock.secjkv
+GitHub Repository:      https://github.com/yasirakhan-hub/App-Lock
+Developer Attribution:  Developed by Yasir A Khan
+Platform & UI:          Native Android, Kotlin, Jetpack Compose, Material Design 3
+Target SDK:             Android 15 (API 35) / Minimum SDK: Android 8.0 (API 26)
+Build System:           Gradle (Kotlin DSL - .gradle.kts), GitHub Actions CI/CD
+Local Time of Audit:    2026-10-29T08:02:24-07:00
+
+
+================================================================================
+SECTION A: EXISTING PROJECT ARCHITECTURE
+================================================================================
+
+Smart AppLock is engineered using a clean, layered native Android architecture
+divided into five primary subsystems:
+
+1. JETPACK COMPOSE UI LAYER
+   - MainActivity (FragmentActivity):
+     Houses the root NavHost with animated crossfades managing high-level screen states:
+     * AUTH_GATE: Master gatekeeper requiring PIN or BiometricPrompt to access configuration.
+     * ONBOARDING: First-time setup flow (Welcome -> Create PIN -> Confirm PIN -> Recovery -> Biometrics).
+     * DASHBOARD: Main status hub displaying monitoring status, quick protection toggle, system permission health cards, theme switch, and navigation.
+     * APP_SELECTION: Installed applications viewer with search filtering, protected app toggles, and authentication challenges.
+     * SETTINGS: Complete security preferences, PIN changes, recovery question changes, relock policies, Device Admin management, and About section.
+     * TEST_LOCK: In-app simulation environment allowing users to safely test lock screen behavior.
+   - LockActivity (FragmentActivity):
+     Fullscreen overlay activity executed with taskAffinity="" and excludeFromRecents="true".
+     Launched over protected apps upon foreground detection. Supports BiometricPrompt and numeric PIN entry.
+
+2. SHARED UI & REUSABLE COMPONENTS
+   - AuthChallengeDialog:
+     Reusable modal dialog gating sensitive operations (protecting apps, changing credentials, deactivating Device Admin, clearing data) behind biometric or PIN verification.
+   - PinKeypad & PinDots:
+     Accessible, haptics-enabled keypad supporting 4-digit or 6-digit PINs, lockout state visualization, backspace deletion, and quick biometric re-trigger.
+
+3. REPOSITORY & DOMAIN CONTROLLER LAYER
+   - AppLockManager (Singleton):
+     Central engine coordinating foreground package detection, session-authenticated package sets (unlockedPackages), target intent caching (pendingInterceptedTargets), debounce timing (600ms), and home launcher package caching.
+   - AppDiscoveryRepository:
+     Queries installed applications using packageManager.queryIntentActivities for Intent.ACTION_MAIN + CATEGORY_LAUNCHER. Caches application labels, critical system classifications, and app icon ImageBitmaps.
+   - PermissionHelper & DeviceAdminHelper:
+     Manages system permission detection (Accessibility, Overlay, Usage Stats, Device Admin) and launches corresponding platform settings intents.
+
+4. FOREGROUND INTERCEPTION & SYSTEM LIFECYCLE
+   - AppLockAccessibilityService:
+     Native AccessibilityService listening for TYPE_WINDOW_STATE_CHANGED events.
+     Configured with canRetrieveWindowContent="false" for strict zero-read privacy.
+     Contains anti-force-stop detection (intercepting Settings -> App Info navigation) and anti-uninstall protection.
+   - AppLockDeviceAdminReceiver:
+     DeviceAdminReceiver enforcing BIND_DEVICE_ADMIN. Intercepts onDisableRequested to display security warning dialog.
+   - ScreenReceiver:
+     Dynamically registered broadcast receiver listening for Intent.ACTION_SCREEN_OFF to clear temporary session unlocks when the user locks their device.
+   - BootReceiver:
+     Broadcast receiver listening for Intent.ACTION_BOOT_COMPLETED to ensure system initialization after device restart.
+
+5. DATA PERSISTENCE & CRYPTOGRAPHIC SECURITY
+   - AppLockPreferences:
+     Local storage via SharedPreferences ("secure_applock_prefs") backed by in-memory volatile caches for sub-microsecond package lock checks.
+   - PinHashUtil:
+     Cryptographic helper employing PBKDF2 / SHA-256 with 5,000 hash stretching rounds, 16-byte random salts, and MessageDigest.isEqual constant-time equality comparisons to prevent timing attacks.
+
+
+================================================================================
+SECTION B: FEATURE-BY-FEATURE AUDIT TABLE
+================================================================================
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+1. FEATURE: Initial Master PIN Setup & Confirmation
+   FILES:
+     - /app/src/main/java/com/example/ui/screens/OnboardingSetupScreen.kt
+     - /app/src/main/java/com/example/data/security/AppLockPreferences.kt
+     - /app/src/main/java/com/example/data/security/PinHashUtil.kt
+   STATUS: Working
+   EVIDENCE:
+     User selects 4-digit or 6-digit PIN length. First input is confirmed against second input.
+     Upon match, PinHashUtil.createSaltedHash creates a random 16-byte salt and SHA-256 hash
+     with 5,000 iterations. Stored safely in SharedPreferences.
+   PROPOSED ENHANCEMENTS: None required. Flow is robust and clean.
+   RISK & DEPENDENCIES: Zero risk. User data is fully preserved.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+2. FEATURE: Recovery Security Question Setup & Reset Flow
+   FILES:
+     - /app/src/main/java/com/example/ui/screens/OnboardingSetupScreen.kt
+     - /app/src/main/java/com/example/ui/screens/SettingsScreen.kt
+     - /app/src/main/java/com/example/data/security/AppLockPreferences.kt
+   STATUS: Working
+   EVIDENCE:
+     Provides standard dropdown questions or custom questions.
+     Answers are sanitized (trim().lowercase()) and cryptographically hashed with unique salts.
+     Plaintext answers are never stored on disk.
+   PROPOSED ENHANCEMENTS: Maintain existing questions and salt logic.
+   RISK & DEPENDENCIES: Low risk. Backward compatible.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+3. FEATURE: AndroidX BiometricPrompt Integration (Fingerprint Unlock)
+   FILES:
+     - /app/src/main/java/com/example/util/BiometricHelper.kt
+     - /app/src/main/java/com/example/ui/lock/LockActivity.kt
+     - /app/src/main/java/com/example/MainActivity.kt
+     - /app/src/main/java/com/example/ui/common/AuthChallengeDialog.kt
+   STATUS: Working
+   EVIDENCE:
+     Uses androidx.biometric:biometric:1.2.0-alpha05.
+     Activities inherit from FragmentActivity.
+     BiometricPrompt triggers automatically when opening LockActivity, MainActivity DashboardAuthGate,
+     or AuthChallengeDialog with graceful, silent fallback to PIN keypad.
+   PROPOSED ENHANCEMENTS: Ensure biometric prompts are suppressed if brute-force lockout is active.
+   RISK & DEPENDENCIES: Low risk. Works across all BiometricManager-compatible devices.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+4. FEATURE: Action-Scoped Sensitive Operation Gating
+   FILES:
+     - /app/src/main/java/com/example/ui/common/AuthChallengeDialog.kt
+     - /app/src/main/java/com/example/ui/screens/AppSelectionScreen.kt
+     - /app/src/main/java/com/example/ui/screens/SettingsScreen.kt
+   STATUS: Working
+   EVIDENCE:
+     Adding or removing protected apps, modifying PIN, changing recovery questions,
+     deactivating Device Admin, or performing a factory reset requires biometric or PIN authentication.
+   PROPOSED ENHANCEMENTS: Continue leveraging centralized AuthChallengeDialog for consistency.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+5. FEATURE: Installed Applications Discovery & Search
+   FILES:
+     - /app/src/main/java/com/example/data/repository/AppDiscoveryRepository.kt
+     - /app/src/main/java/com/example/ui/screens/AppSelectionScreen.kt
+     - /app/src/main/java/com/example/data/model/AppInfo.kt
+   STATUS: Working
+   EVIDENCE:
+     Uses PackageManager.MATCH_ALL on Intent.ACTION_MAIN with CATEGORY_LAUNCHER.
+     Complies with Google Play package visibility requirements (<queries> tag in Manifest).
+     AppInfo is marked with Compose @Immutable to avoid unnecessary list recompositions.
+     Icons and default home launcher are cached in memory.
+   PROPOSED ENHANCEMENTS: Maintain in-memory caching to guarantee smooth 60fps scrolling.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+6. FEATURE: Foreground Window Transition Interception
+   FILES:
+     - /app/src/main/java/com/example/service/AppLockAccessibilityService.kt
+     - /app/src/main/java/com/example/data/repository/AppLockManager.kt
+     - /app/src/main/res/xml/accessibility_service_config.xml
+   STATUS: Working
+   EVIDENCE:
+     Service listens to TYPE_WINDOW_STATE_CHANGED. Configured with canRetrieveWindowContent="false".
+     Ignores transient popups (keyboards, toasts, dialogs).
+     AppLockManager checks shouldLock(pkg) using in-memory cached sets in <1 microsecond.
+     Launch debounce of 600ms prevents duplicate activity launches.
+   PROPOSED ENHANCEMENTS: Retain debounce timer; ensure home launcher cache is refreshed on package changes.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+7. FEATURE: Target Intent Capture & Launch Resumption
+   FILES:
+     - /app/src/main/java/com/example/data/repository/AppLockManager.kt
+     - /app/src/main/java/com/example/ui/lock/LockActivity.kt
+   STATUS: Working
+   EVIDENCE:
+     AppLockManager.storeInterceptedTarget(pkg, className) stores the exact package and class.
+     Upon successful authentication, launchInterceptedTarget resolves the explicit Activity intent
+     or fallback package launcher intent and launches it with Intent.FLAG_ACTIVITY_NEW_TASK,
+     seamlessly returning the user to the intercepted app.
+   PROPOSED ENHANCEMENTS: Keep existing resolution mechanism.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+8. FEATURE: Relock Policy Configuration
+   FILES:
+     - /app/src/main/java/com/example/data/security/AppLockPreferences.kt
+     - /app/src/main/java/com/example/data/repository/AppLockManager.kt
+     - /app/src/main/java/com/example/receiver/ScreenReceiver.kt
+   STATUS: Working
+   EVIDENCE:
+     Two selectable modes:
+     1. Immediately on app exit (High Security): Clears session when user leaves the app.
+     2. When screen turns off (Convenience): Apps stay unlocked until device screen locks.
+   PROPOSED ENHANCEMENTS: None required.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+9. FEATURE: Brute-Force Rate Limiting & Lockout
+   FILES:
+     - /app/src/main/java/com/example/data/security/AppLockPreferences.kt
+     - /app/src/main/java/com/example/ui/common/PinKeypad.kt
+     - /app/src/main/java/com/example/ui/lock/LockActivity.kt
+   STATUS: Working
+   EVIDENCE:
+     Enforces a maximum of 5 consecutive failed attempts.
+     Exceeding threshold writes a 30-second lockout timestamp to SharedPreferences.
+     Keypad is disabled and displays a live countdown timer until lockout expires.
+   PROPOSED ENHANCEMENTS: Automatically dismiss biometric prompt if triggered during active lockout.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+10. FEATURE: Anti-Force-Stop & Anti-Uninstall Protection (Device Administrator)
+   FILES:
+     - /app/src/main/java/com/example/receiver/AppLockDeviceAdminReceiver.kt
+     - /app/src/main/java/com/example/util/DeviceAdminHelper.kt
+     - /app/src/main/java/com/example/service/AppLockAccessibilityService.kt
+     - /app/src/main/java/com/example/ui/screens/SettingsScreen.kt
+   STATUS: Partial / Operating to maximum platform limits
+   EVIDENCE:
+     Device Admin receiver enforces BIND_DEVICE_ADMIN.
+     AccessibilityService intercepts navigation to Settings -> App Info for Smart AppLock
+     and executes GLOBAL_ACTION_HOME.
+     SettingsScreen includes transparent "Technical Architecture & Limits" dialog explaining
+     that on standard Android (non-MDM/Device Owner), Safe Mode or OS Settings cannot be 100% blocked.
+   PROPOSED ENHANCEMENTS: Retain honest transparency without misleading claims.
+   RISK & DEPENDENCIES: Low risk. Complies with Google Play developer policies.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+11. FEATURE: Light / Dark Mode Toggle
+   FILES:
+     - /app/src/main/java/com/example/MainActivity.kt
+     - /app/src/main/java/com/example/ui/screens/DashboardScreen.kt
+     - /app/src/main/java/com/example/data/security/AppLockPreferences.kt
+   STATUS: Working
+   EVIDENCE:
+     Header button situated beside Settings on DashboardScreen toggles between Light and Dark themes.
+     Preference is persisted in SharedPreferences (dark_theme_override).
+   PROPOSED ENHANCEMENTS: Maintain seamless dynamic switching.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+12. FEATURE: About Section & Developer Attribution
+   FILES:
+     - /app/src/main/java/com/example/ui/screens/SettingsScreen.kt
+   STATUS: Working
+   EVIDENCE:
+     Bottom of Settings screen contains:
+     - "ABOUT" header in bold gold (0xFFFBBF24) with letter spacing.
+     - "Developed by Yasir A Khan" in MaterialTheme.colorScheme.primary (Danger Zone blue).
+   PROPOSED ENHANCEMENTS: Maintain verified color token alignment across theme changes.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+13. FEATURE: GitHub Actions Automated Build Pipeline
+   FILES:
+     - /.github/workflows/build-apk.yml
+   STATUS: Working
+   EVIDENCE:
+     Triggers on push to branch main, uses actions/checkout@v4 with ${{ github.sha }},
+     sets up JDK 17, and runs ./gradlew clean assembleDebug --no-daemon.
+   PROPOSED ENHANCEMENTS: Workflow is fully operational.
+   RISK & DEPENDENCIES: Low risk.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+================================================================================
+SECTION C: CRITICAL BUGS, SECURITY RISKS, AND PLATFORM LIMITATIONS
+================================================================================
+
+1. ANDROID SYSTEM BOUNDARIES: DEVICE ADMIN VS DEVICE OWNER
+   - On Android 10+ (API 29+), standard DeviceAdminReceiver does not grant third-party
+     apps the authority to block the OS Settings "Force Stop" button or completely
+     prohibit uninstallation.
+   - Genuine uninstallation prevention is strictly restricted to Device Owner (MDM) mode,
+     which must be provisioned during initial device factory setup via NFC, QR code, or ADB.
+   - Implementation Resolution:
+     Smart AppLock utilizes an effective hybrid approach:
+     a) AccessibilityService detects window transitions into Settings -> App Info for
+        com.aistudio.applock.secjkv and immediately sends GLOBAL_ACTION_HOME.
+     b) AppLockDeviceAdminReceiver implements onDisableRequested() to prompt a warning.
+     c) The application clearly discloses this system boundary in its "Technical Architecture
+        & Limits" dialog to maintain complete honesty and user trust.
+
+2. AGGRESSIVE OEM BATTERY KILLERS & SERVICE TERMINATION
+   - Manufacturers such as Xiaomi (MIUI/HyperOS), Samsung (One UI), Huawei (EMUI), and
+     Oppo/Realme (ColorOS) employ non-standard battery optimization daemons that kill
+     background AccessibilityServices when apps are idle.
+   - Implementation Resolution:
+     The app features setup verification cards and permission helpers directing users
+     to disable battery optimization for Smart AppLock ("Unrestricted Battery" / "Autostart").
+
+3. ANDROID 12+ (API 31+) BACKGROUND ACTIVITY LAUNCH RESTRICTIONS
+   - Android 12 severely restricts launching activities from the background (e.g. from
+     background services or broadcast receivers).
+   - Implementation Resolution:
+     Smart AppLock bypasses this constraint legitimately by launching LockActivity directly
+     from the active AppLockAccessibilityService context (which holds the foreground window token)
+     combined with Intent.FLAG_ACTIVITY_NEW_TASK and the SYSTEM_ALERT_WINDOW permission.
+
+4. ACCESSIBILITY PRIVACY & GOOGLE PLAY POLICY COMPLIANCE
+   - Accessibility services that read screen contents are subject to strict scrutiny on Google Play.
+   - Implementation Resolution:
+     Smart AppLock explicitly configures accessibility_service_config.xml with:
+     * canRetrieveWindowContent="false"
+     * accessibilityFeedbackType="feedbackGeneric"
+     * accessibilityEventTypes="typeWindowStateChanged"
+     This guarantees the service cannot read user keystrokes, personal messages, or screen data.
+
+
+================================================================================
+SECTION D: PRIORITIZED IMPLEMENTATION PLAN (P0 THROUGH P5)
+================================================================================
+
+P0 — BUILD INTEGRITY AND DATA PROTECTION (ZERO-REGRESSION MANDATE)
+   - Preserve application package ID: com.aistudio.applock.secjkv.
+   - Preserve application display name: "Smart AppLock".
+   - Retain existing keystore, signing configurations, and Gradle dependencies.
+   - Protect all stored user data: SharedPreferences hashes, salts, recovery question answers,
+     and protected package selections must never be cleared or reset during upgrades.
+   - Verify zero build failures via compile_applet and Robolectric unit tests.
+
+P1 — CORE APPLOCK MONITORING & INTERCEPTION RELIABILITY
+   - Maintain AppLockManager 600ms debounce window to prevent repeated lock screen loops.
+   - Ensure target intent resumption (launchInterceptedTarget) continues to support both
+     explicit target Activity classes and default launcher intents.
+   - Invalidate home launcher cache on package change broadcasts to seamlessly adapt if the
+     user installs or switches third-party home launchers (Nova, Lawnchair, Niagara).
+
+P2 — BIOMETRIC AUTHENTICATION HARDWARE EDGE-CASES
+   - Ensure BiometricPrompt handles sensor lockouts (BIOMETRIC_ERROR_LOCKOUT) gracefully
+     by immediately switching to the PIN keypad.
+   - Suppress automatic BiometricPrompt triggers during an active 30-second brute-force lockout.
+
+P3 — PERMISSION HEALTH & OEM BATTERY OPTIMIZATION
+   - Provide clear, direct shortcuts to Battery Optimization settings so users can grant
+     unrestricted background execution on aggressive OEM skins.
+   - Keep permission status indicators updated in real-time when returning from system settings.
+
+P4 — UI / UX POLISH & ACCESSIBILITY
+   - Ensure all touch targets across keypad, buttons, and switches meet the 48dp M3 standard.
+   - Maintain the About section with bold gold "ABOUT" header and primary accent blue
+     "Developed by Yasir A Khan".
+   - Confirm high contrast and legibility across both Light and Dark theme modes.
+
+P5 — AUTOMATED TESTING & VERIFICATION
+   - Execute compile_applet to confirm clean compilation.
+   - Execute gradle :app:testDebugUnitTest to confirm 100% test pass rate across all test suites.
+
+
+================================================================================
+SECTION E: FILES EXPECTED TO CHANGE (UPON APPROVAL)
+================================================================================
+
+1. /app/src/main/java/com/example/util/BiometricHelper.kt
+   Rationale: Enhance error callback handling to gracefully detect BIOMETRIC_ERROR_LOCKOUT
+   and ensure clean fallback to PIN without user confusion.
+
+2. /app/src/main/java/com/example/util/PermissionHelper.kt
+   Rationale: Provide optional helper method to check and request ignoring battery
+   optimizations (PowerManager.isIgnoringBatteryOptimizations).
+
+3. /app/src/main/java/com/example/data/repository/AppLockManager.kt
+   Rationale: Invalidate cachedLauncherPackage on package change events to ensure immediate
+   adaptation if the user switches home launchers.
+
+4. /app/src/main/java/com/example/ui/screens/SettingsScreen.kt
+   Rationale: Maintain color token verification for "Developed by Yasir A Khan" and ensure
+   consistent typography across Light/Dark modes.
+
+
+================================================================================
+SECTION F: TESTING CHECKLIST
+================================================================================
+
+AUTOMATED LOCAL JVM / ROBOLECTRIC TESTS:
+- [x] testPinHashingAndVerification():
+      Confirms SHA-256 salted hash stretching and constant-time equality comparisons.
+- [x] testFailedAttemptsAndLockout():
+      Verifies 5 consecutive incorrect PIN attempts trigger a 30-second lockout.
+- [x] testRecoveryQuestionVerification():
+      Verifies case-insensitive normalization and hash verification for recovery answers.
+- [x] testTargetResumptionModel():
+      Validates storeInterceptedTarget, getAndRemoveInterceptedTarget, and createLaunchIntent.
+- [x] testProtectedPackagePersistence():
+      Confirms adding/removing protected packages updates both memory cache and disk storage.
+
+PHYSICAL DEVICE & EMULATOR VERIFICATION CHECKLIST:
+- [ ] First Launch & Onboarding:
+      Verify clean transition through Welcome -> PIN Setup -> Confirm PIN -> Recovery -> Biometrics.
+- [ ] Protected App Interception:
+      Open a locked application. Confirm LockActivity appears within 100ms.
+- [ ] PIN Authentication & Target Resumption:
+      Enter master PIN. Confirm target application opens immediately.
+- [ ] Back Button Security:
+      Press Back on LockActivity. Confirm user is redirected to Android Home screen.
+- [ ] Biometric Authentication:
+      Open protected app. Confirm fingerprint dialog prompts automatically and unlocks on touch.
+- [ ] Sensitive Action Gating:
+      Toggle an app lock in AppSelectionScreen. Confirm AuthChallengeDialog requests authentication.
+- [ ] Theme Switcher:
+      Tap theme toggle icon in Dashboard header. Confirm immediate Light/Dark mode transition.
+- [ ] Device Admin Activation:
+      Activate Device Admin in Settings. Confirm active status indicator turns green ("Protected").
+- [ ] Screen Off Relock:
+      With "When screen turns off" policy active, verify apps remain unlocked while device is on
+      and lock immediately when screen turns off.
+
+
+================================================================================
+SECTION G: DECISIONS & APPROVALS REQUIRED BEFORE MODIFICATIONS
+================================================================================
+
+1. FEATURE SCOPE CONFIRMATION:
+   Confirm that all 13 core features documented above meet expectations and no
+   unexpected features or rewrites are needed.
+
+2. PERMISSION GUIDANCE ENHANCEMENT:
+   Confirm approval to include an optional Battery Optimization shortcut card
+   to assist users on Xiaomi / Samsung / Huawei devices.
+
+3. APPROVAL TO PROCEED:
+   Provide confirmation to begin focused implementation of the planned P0-P5 enhancements.
+
+================================================================================
+END OF AUDIT AND IMPLEMENTATION PLAN
+================================================================================
