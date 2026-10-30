@@ -873,21 +873,33 @@ internal fun ChangePinDialog(
         }
     }
 
+    val isBiometricConsumed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
     fun triggerExistingBiometricVerification() {
         if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
+            isBiometricConsumed.set(false)
             BiometricHelper.showBiometricPrompt(
                 activity = activity,
                 title = "Verify Current ${currentConfiguredMethod.displayName}",
                 subtitle = "Confirm your identity to set up ${targetMethod.displayName}",
                 negativeButtonText = "Use ${currentConfiguredMethod.displayName}",
                 onSuccess = {
-                    preferences.resetFailedAttempts()
-                    errorMsg = null
-                    currentInput = ""
-                    step = ChangeAuthStep.CREATE_NEW
+                    if (isBiometricConsumed.compareAndSet(false, true)) {
+                        BiometricHelper.cancelCurrentPrompt()
+                        preferences.resetFailedAttempts()
+                        errorMsg = null
+                        currentInput = ""
+                        step = ChangeAuthStep.CREATE_NEW
+                    }
                 },
                 onError = { _, _ -> }
             )
+        }
+    }
+
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            BiometricHelper.cancelCurrentPrompt()
         }
     }
 

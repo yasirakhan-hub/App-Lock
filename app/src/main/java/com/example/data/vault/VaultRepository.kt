@@ -24,6 +24,20 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 class DuplicateVaultItemException(message: String) : Exception(message)
+class InsufficientStorageException(message: String) : Exception(message)
+class VaultIntegrityException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+enum class VaultImportMode {
+    COPY,
+    MOVE
+}
+
+sealed class OriginalDeletionStatus {
+    object Deleted : OriginalDeletionStatus()
+    data class NotSupported(val message: String) : OriginalDeletionStatus()
+    data class PermissionDenied(val message: String) : OriginalDeletionStatus()
+    data class Failed(val message: String) : OriginalDeletionStatus()
+}
 
 /**
  * Repository orchestrating secure storage, indexing, atomic imports,
@@ -198,6 +212,17 @@ class VaultRepository(private val context: Context) {
      * ContentResolver.openAssetFileDescriptor for virtual/cloud/media documents.
      */
     private fun openUriInputStream(uri: Uri): InputStream? {
+        if (uri.scheme == "file" && uri.path != null) {
+            val file = File(uri.path!!)
+            if (file.exists() && file.canRead()) {
+                return try {
+                    FileInputStream(file)
+                } catch (_: Throwable) {
+                    null
+                }
+            }
+        }
+
         val contentResolver = context.contentResolver
         try {
             contentResolver.takePersistableUriPermission(
@@ -222,9 +247,8 @@ class VaultRepository(private val context: Context) {
     }
 
     /**
-     * Imports a file from a content Uri via SAF / Photo Picker.
-     * Streams directly from the source URI through SHA-256 calculation and AES-256-GCM encryption
-     * in a single pass without writing unencrypted temporary files or loading full files into memory.
+     * Imports a file from a content Uri via SAF / Photo Picker with full cryptographic
+     * integrity verification and pre-allocated storage safety checks.
      */
     suspend fun importFromUri(
         uri: Uri,
@@ -239,6 +263,20 @@ class VaultRepository(private val context: Context) {
         try {
             ensureDirectories()
             val contentResolver = context.contentResolver
+
+            // Upfront storage estimation check if queryable
+            val estimatedSize = queryFileSize(uri)
+            if (estimatedSize > 0L) {
+                val usableSpace = context.filesDir.usableSpace
+                // Require estimated payload plus 5MB buffer
+                if (usableSpace < estimatedSize + 5L * 1024 * 1024) {
+                    return@withContext Result.failure(
+                        InsufficientStorageException(
+                            "Insufficient device storage to safely encrypt file ($estimatedSize bytes needed, $usableSpace available)"
+                        )
+                    )
+                }
+            }
 
             val fileName = preferredName ?: queryFileName(uri) ?: "vault_file_${System.currentTimeMillis()}"
             val rawMime = preferredMimeType ?: runCatching { contentResolver.getType(uri) }.getOrNull()
@@ -264,7 +302,7 @@ class VaultRepository(private val context: Context) {
             var totalBytes = 0L
 
             val sourceStream = openUriInputStream(uri)
-                ?: return@withContext Result.failure(IllegalArgumentException("Cannot open selected file"))
+                ?: return@withContext Result.failure(IllegalArgumentException("Cannot open selected file for reading"))
 
             sourceStream.use { rawIn ->
                 val hashingIn = object : FilterInputStream(rawIn) {
@@ -295,6 +333,44 @@ class VaultRepository(private val context: Context) {
             if (totalBytes <= 0L) {
                 tempEncFile.delete()
                 return@withContext Result.failure(IllegalArgumentException("Selected file is empty or unreadable"))
+            }
+
+            // Post-write storage safety check
+            if (context.filesDir.usableSpace < 2L * 1024 * 1024) {
+                tempEncFile.delete()
+                return@withContext Result.failure(
+                    InsufficientStorageException("Device storage exhausted during encryption. Vault import aborted.")
+                )
+            }
+
+            // 1. Structural File Integrity Check: Magic (4B) + IV (12B) + Payload + GCM Tag (16B) = totalBytes + 32L
+            val expectedLength = VaultCryptoEngine.MAGIC_HEADER.size + 12L + totalBytes + 16L
+            if (!tempEncFile.exists() || tempEncFile.length() != expectedLength) {
+                val actualLen = if (tempEncFile.exists()) tempEncFile.length() else 0L
+                tempEncFile.delete()
+                return@withContext Result.failure(
+                    VaultIntegrityException("Encrypted container size verification failed: expected $expectedLength bytes, got $actualLen")
+                )
+            }
+
+            // 2. Cryptographic Integrity Check: verify ciphertext and authentication tag
+            try {
+                FileInputStream(tempEncFile).use { verifyIn ->
+                    val sink = object : OutputStream() {
+                        var verifyCount = 0L
+                        override fun write(b: Int) { verifyCount += 1 }
+                        override fun write(b: ByteArray, off: Int, len: Int) { verifyCount += len }
+                    }
+                    VaultCryptoEngine.decryptStream(verifyIn, sink)
+                    if (sink.verifyCount != totalBytes) {
+                        throw VaultIntegrityException("Cryptographic verification decrypted $sink.verifyCount bytes, expected $totalBytes")
+                    }
+                }
+            } catch (cryptoErr: Throwable) {
+                tempEncFile.delete()
+                return@withContext Result.failure(
+                    VaultIntegrityException("Cryptographic verification failed: ${cryptoErr.message}", cryptoErr)
+                )
             }
 
             val sha256 = digest.digest().joinToString("") { "%02x".format(it) }
@@ -434,23 +510,87 @@ class VaultRepository(private val context: Context) {
     }
 
     /**
-     * Decrypts an item directly into a user's destination SAF Uri.
+     * Decrypts an item directly into a user's destination SAF Uri with byte-level integrity verification.
+     * Returns Result with total bytes successfully written.
      */
-    suspend fun exportItemToUri(item: VaultItem, destUri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun exportItemToUri(item: VaultItem, destUri: Uri): Result<Long> = withContext(Dispatchers.IO) {
         val encFile = getEncryptedFile(item)
-        if (!encFile.exists()) return@withContext Result.failure(Exception("Encrypted file not found"))
+        if (!encFile.exists() || encFile.length() == 0L) {
+            return@withContext Result.failure(java.io.FileNotFoundException("Encrypted vault file not found on disk"))
+        }
 
         try {
-            context.contentResolver.openOutputStream(destUri)?.use { outStream ->
-                FileInputStream(encFile).use { inStream ->
-                    VaultCryptoEngine.decryptStream(inStream, outStream)
-                }
-            } ?: return@withContext Result.failure(Exception("Cannot open export destination"))
+            val contentResolver = context.contentResolver
+            val outStream = if (destUri.scheme == "file" && destUri.path != null) {
+                FileOutputStream(File(destUri.path!!))
+            } else {
+                contentResolver.openOutputStream(destUri, "wt")
+                    ?: contentResolver.openOutputStream(destUri)
+            } ?: return@withContext Result.failure(java.io.IOException("Cannot open export destination stream"))
 
-            Result.success(Unit)
+            var writtenBytes = 0L
+            outStream.use { rawOut ->
+                val countingOut = object : OutputStream() {
+                    override fun write(b: Int) {
+                        rawOut.write(b)
+                        writtenBytes += 1
+                    }
+                    override fun write(b: ByteArray, off: Int, len: Int) {
+                        rawOut.write(b, off, len)
+                        writtenBytes += len
+                    }
+                    override fun flush() {
+                        rawOut.flush()
+                    }
+                }
+                FileInputStream(encFile).use { inStream ->
+                    VaultCryptoEngine.decryptStream(inStream, countingOut)
+                }
+                countingOut.flush()
+            }
+
+            // Verify integrity of decrypted export against original recorded plaintext size
+            if (writtenBytes != item.fileSizeRaw) {
+                return@withContext Result.failure(
+                    VaultIntegrityException(
+                        "Export size verification failed: expected ${item.fileSizeRaw} bytes, but wrote $writtenBytes bytes"
+                    )
+                )
+            }
+
+            notifyMediaScanner(destUri)
+            Result.success(writtenBytes)
         } catch (e: Exception) {
+            android.util.Log.e("VaultRepository", "Export failed for item: ${item.id}", e)
             Result.failure(e)
         }
+    }
+
+    /**
+     * Exports the decrypted item to destination SAF Uri, verifies written bytes, and removes
+     * the Vault copy ONLY after verified export succeeds. If export fails, the Vault copy is 100% retained.
+     */
+    suspend fun exportAndRemoveItem(item: VaultItem, destUri: Uri): Result<Long> = withContext(Dispatchers.IO) {
+        val exportResult = exportItemToUri(item, destUri)
+        if (exportResult.isSuccess) {
+            deleteItem(item)
+        }
+        exportResult
+    }
+
+    /**
+     * Restores the item to public device storage. Does not remove the Vault copy unless [removeVaultCopy] is true.
+     */
+    suspend fun restoreItemToStorage(
+        item: VaultItem,
+        destUri: Uri,
+        removeVaultCopy: Boolean = false
+    ): Result<Long> = withContext(Dispatchers.IO) {
+        val exportResult = exportItemToUri(item, destUri)
+        if (exportResult.isSuccess && removeVaultCopy) {
+            deleteItem(item)
+        }
+        exportResult
     }
 
     /**
@@ -633,6 +773,120 @@ class VaultRepository(private val context: Context) {
                 VaultCategory.VIDEO -> "video/mp4"
                 VaultCategory.DOCUMENT, null -> "application/octet-stream"
             }
+        }
+    }
+
+    private fun queryFileSize(uri: Uri): Long {
+        return try {
+            if (uri.scheme == "file" && uri.path != null) {
+                File(uri.path!!).length()
+            } else {
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(OpenableColumns.SIZE),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex != -1 && cursor.moveToFirst() && !cursor.isNull(sizeIndex)) {
+                        cursor.getLong(sizeIndex)
+                    } else -1L
+                } ?: -1L
+            }
+        } catch (_: Throwable) {
+            -1L
+        }
+    }
+
+    /**
+     * Notifies Android's MediaScanner or ContentResolver that a public file was written or removed
+     * so that the Gallery and system File Managers update visibility immediately.
+     */
+    private fun notifyMediaScanner(uri: Uri) {
+        try {
+            if (uri.scheme == "file" && uri.path != null) {
+                android.media.MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(uri.path),
+                    null,
+                    null
+                )
+            } else if (uri.scheme == "content") {
+                context.contentResolver.notifyChange(uri, null)
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * Safely attempts deletion of an original file from external storage/MediaStore/SAF after verified import.
+     * Never silently fails or reports success if the file still exists.
+     */
+    fun deleteOriginalUri(uri: Uri): OriginalDeletionStatus {
+        try {
+            if (uri.scheme == "file" && uri.path != null) {
+                val file = File(uri.path!!)
+                if (!file.exists()) {
+                    return OriginalDeletionStatus.Deleted
+                }
+                val deleted = file.delete()
+                return if (deleted) {
+                    notifyMediaScanner(uri)
+                    OriginalDeletionStatus.Deleted
+                } else {
+                    OriginalDeletionStatus.Failed("Unable to delete original file from filesystem")
+                }
+            }
+
+            val contentResolver = context.contentResolver
+
+            // 1. Try DocumentsContract.deleteDocument if it is a document URI
+            if (android.provider.DocumentsContract.isDocumentUri(context, uri)) {
+                try {
+                    val deleted = android.provider.DocumentsContract.deleteDocument(contentResolver, uri)
+                    if (deleted) {
+                        notifyMediaScanner(uri)
+                        return OriginalDeletionStatus.Deleted
+                    }
+                } catch (se: SecurityException) {
+                    return OriginalDeletionStatus.PermissionDenied(
+                        "Android security permission denied deleting the original document."
+                    )
+                } catch (ue: UnsupportedOperationException) {
+                    // Document provider does not support deletion (e.g. read-only tree)
+                } catch (_: Throwable) {}
+            }
+
+            // 2. Try standard ContentResolver.delete
+            try {
+                val rows = contentResolver.delete(uri, null, null)
+                if (rows > 0) {
+                    notifyMediaScanner(uri)
+                    return OriginalDeletionStatus.Deleted
+                }
+            } catch (se: SecurityException) {
+                return OriginalDeletionStatus.PermissionDenied(
+                    "Android security permission denied deleting original media."
+                )
+            } catch (_: Throwable) {}
+
+            // 3. Verify whether the file still exists
+            val stillExists = try {
+                contentResolver.openInputStream(uri)?.use { true } ?: false
+            } catch (_: Throwable) {
+                false
+            }
+
+            return if (!stillExists) {
+                OriginalDeletionStatus.Deleted
+            } else {
+                OriginalDeletionStatus.NotSupported(
+                    "Original file is protected by a read-only provider (such as the system Photo Picker) that does not allow app deletion. Original file was kept."
+                )
+            }
+        } catch (t: Throwable) {
+            return OriginalDeletionStatus.Failed(t.message ?: "Failed to delete original file")
         }
     }
 }

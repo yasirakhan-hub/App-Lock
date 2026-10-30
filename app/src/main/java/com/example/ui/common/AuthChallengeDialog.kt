@@ -73,22 +73,33 @@ fun AuthChallengeDialog(
         AuthMethod.PASSWORD -> "Use Password"
     }
 
+    val isAuthorizedConsumed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+    fun handleAuthorizedSuccess() {
+        if (isAuthorizedConsumed.compareAndSet(false, true)) {
+            BiometricHelper.cancelCurrentPrompt()
+            preferences.resetFailedAttempts()
+            onAuthorized()
+        }
+    }
+
     fun triggerBiometric() {
-        if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
+        if (activity != null && isBiometricEnabled && lockoutSeconds == 0 && !isAuthorizedConsumed.get()) {
             BiometricHelper.showBiometricPrompt(
                 activity = activity,
                 title = title,
                 subtitle = subtitle,
                 negativeButtonText = negativeBtnLabel,
                 onSuccess = {
-                    preferences.resetFailedAttempts()
-                    onAuthorized()
+                    handleAuthorizedSuccess()
                 },
                 onError = { errorCode, _ ->
-                    if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
-                        errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
-                    ) {
-                        errorMsg = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                    if (!isAuthorizedConsumed.get()) {
+                        if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
+                            errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
+                        ) {
+                            errorMsg = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                        }
                     }
                 }
             )
@@ -96,6 +107,7 @@ fun AuthChallengeDialog(
     }
 
     fun handleFailedAttempt(customIncorrectMessage: String) {
+        if (isAuthorizedConsumed.get()) return
         isError = true
         preferences.recordFailedAttempt()
         lockoutSeconds = preferences.getRemainingLockoutSeconds()
@@ -106,10 +118,18 @@ fun AuthChallengeDialog(
         }
     }
 
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            BiometricHelper.cancelCurrentPrompt()
+        }
+    }
+
     LaunchedEffect(Unit) {
-        if (isBiometricEnabled && lockoutSeconds == 0) {
+        if (isBiometricEnabled && lockoutSeconds == 0 && !isAuthorizedConsumed.get()) {
             delay(250L)
-            triggerBiometric()
+            if (!isAuthorizedConsumed.get()) {
+                triggerBiometric()
+            }
         }
     }
 
@@ -185,8 +205,7 @@ fun AuthChallengeDialog(
                                     if (next.length == pinLength) {
                                         scope.launch {
                                             if (preferences.verifyCredential(next)) {
-                                                preferences.resetFailedAttempts()
-                                                onAuthorized()
+                                                handleAuthorizedSuccess()
                                             } else {
                                                 handleFailedAttempt("Incorrect PIN")
                                                 delay(300L)
@@ -252,8 +271,7 @@ fun AuthChallengeDialog(
                             onPatternComplete = { pattern ->
                                 if (lockoutSeconds > 0) return@PatternLockGrid
                                 if (preferences.verifyCredential(pattern)) {
-                                    preferences.resetFailedAttempts()
-                                    onAuthorized()
+                                    handleAuthorizedSuccess()
                                 } else {
                                     handleFailedAttempt("Incorrect pattern")
                                 }
@@ -300,8 +318,7 @@ fun AuthChallengeDialog(
                                     return@PasswordAuthInput
                                 }
                                 if (preferences.verifyCredential(enteredPassword)) {
-                                    preferences.resetFailedAttempts()
-                                    onAuthorized()
+                                    handleAuthorizedSuccess()
                                 } else {
                                     handleFailedAttempt("Incorrect password")
                                     enteredPassword = ""

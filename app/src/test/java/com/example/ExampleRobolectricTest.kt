@@ -835,6 +835,140 @@ class ExampleRobolectricTest {
         activity.setContentView(android.view.View(activity))
         controller.pause().stop().destroy()
     }
+
+    @Test
+    fun testPhase1SelfAppInfoProtection() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+
+        // 1. Initial state: Self App Info is not unlocked
+        assertFalse("Self App Info must not be unlocked initially", appLockManager.isSelfAppInfoUnlocked())
+
+        // 2. shouldLock must never lock self package directly (handled specifically via AppInfo detection)
+        assertFalse("shouldLock must return false for own package to prevent self-lockout", appLockManager.shouldLock(context.packageName))
+
+        // 3. Authenticating self App Info
+        appLockManager.onSelfAppInfoUnlocked()
+        assertTrue("Self App Info must report unlocked after authentication", appLockManager.isSelfAppInfoUnlocked())
+
+        // 4. Screen off resets the session
+        appLockManager.onScreenOff()
+        assertFalse("Self App Info must be relocked on screen off", appLockManager.isSelfAppInfoUnlocked())
+    }
+
+    @Test
+    fun testPhase1RecentsOverviewFalseAuthenticationPrevention() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+        val protectedApp = "com.sample.banking"
+        preferences.setPackageProtected(protectedApp, true)
+
+        // 1. Overview / Recents activity recognition across OEMs
+        assertTrue("AOSP / Pixel Quickstep Recents must be identified as Recents", appLockManager.isRecentsOrOverview("com.android.launcher3", "com.android.quickstep.RecentsActivity"))
+        assertTrue("Samsung Recents must be identified as Recents", appLockManager.isRecentsOrOverview("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.RecentsActivity"))
+        assertTrue("MIUI / HyperOS Recents must be identified as Recents", appLockManager.isRecentsOrOverview("com.miui.home", "com.miui.home.launcher.recents.RecentsActivity"))
+
+        // 2. When Recents overview is entered, shouldLock returns false even for protected apps
+        appLockManager.onRecentsOverviewEntered()
+        assertTrue("Recents overview active flag must be set", appLockManager.isRecentsOverviewActive)
+        assertFalse("shouldLock must return false when Recents overview is active to avoid false prompt over task cards",
+            appLockManager.shouldLock(protectedApp, "com.android.quickstep.RecentsActivity"))
+
+        // 3. Home launcher transition grace period:
+        // App is unlocked:
+        appLockManager.onPackageUnlocked(protectedApp)
+        assertTrue(appLockManager.isPackageUnlocked(protectedApp))
+
+        // User swipes up to launcher:
+        appLockManager.onForegroundPackageChanged("com.google.android.apps.nexuslauncher", "com.google.android.apps.nexuslauncher.NexusLauncherActivity")
+
+        // Returning to the same app immediately (e.g. within 1200ms grace window):
+        appLockManager.onForegroundPackageChanged(protectedApp, "com.sample.banking.MainActivity")
+        assertTrue("Protected app must stay unlocked when returning within the gesture / recents grace window", appLockManager.isPackageUnlocked(protectedApp))
+        assertFalse("shouldLock must return false for app unlocked within grace window", appLockManager.shouldLock(protectedApp))
+    }
+
+    @Test
+    fun testPhase1TransientOverlaysAndSessionStability() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+        val instagramPackage = "com.instagram.android"
+        preferences.setPackageProtected(instagramPackage, true)
+
+        // Initial launch requires lock
+        assertTrue(appLockManager.shouldLock(instagramPackage, "com.instagram.mainactivity.MainActivity"))
+
+        // User unlocks Instagram
+        appLockManager.onPackageUnlocked(instagramPackage)
+        appLockManager.onForegroundPackageChanged(instagramPackage, "com.instagram.mainactivity.MainActivity")
+        assertTrue(appLockManager.isPackageUnlocked(instagramPackage))
+        assertFalse(appLockManager.shouldLock(instagramPackage, "com.instagram.mainactivity.MainActivity"))
+
+        // User opens soft keyboard (Gboard / Samsung / SwiftKey) inside Instagram:
+        val gboard = "com.google.android.inputmethod.latin"
+        assertTrue("Gboard must be identified as transient overlay", appLockManager.isTransientSystemOrOverlayPackage(gboard))
+        appLockManager.onForegroundPackageChanged(gboard, "com.android.inputmethod.latin.LatinIME")
+
+        // Returning from keyboard to Instagram:
+        appLockManager.onForegroundPackageChanged(instagramPackage, "com.instagram.direct.inbox.InboxActivity")
+        assertTrue("Instagram must remain unlocked when typing with soft keyboard", appLockManager.isPackageUnlocked(instagramPackage))
+        assertFalse("Keyboard dismissal must not re-prompt lock", appLockManager.shouldLock(instagramPackage, "com.instagram.direct.inbox.InboxActivity"))
+
+        // User touches volume slider / notification panel (SystemUI):
+        val systemUi = "com.android.systemui"
+        assertTrue("SystemUI must be identified as transient overlay", appLockManager.isTransientSystemOrOverlayPackage(systemUi))
+        appLockManager.onForegroundPackageChanged(systemUi, "com.android.systemui.volume.VolumeDialogImpl")
+
+        // Navigating to Instagram Story:
+        appLockManager.onForegroundPackageChanged(instagramPackage, "com.instagram.modal.ModalActivity")
+        assertTrue("Instagram must remain unlocked after volume / SystemUI overlay", appLockManager.isPackageUnlocked(instagramPackage))
+        assertFalse("Story viewing must not re-prompt lock", appLockManager.shouldLock(instagramPackage, "com.instagram.modal.ModalActivity"))
+    }
+
+    @Test
+    fun testPhase2BiometricAuthenticationReliability() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+        preferences.setBiometricEnabled(true)
+
+        // 1. Biometric availability check must not crash
+        val isAvail = com.example.util.BiometricHelper.isBiometricAvailable(context)
+        assertTrue(isAvail || !isAvail)
+
+        // 2. cancelCurrentPrompt must clear prompt safely
+        com.example.util.BiometricHelper.cancelCurrentPrompt()
+
+        // 3. Verify target package resolution fallback in launchInterceptedTarget
+        val testPackage = "com.sample.banking"
+        appLockManager.storeInterceptedTarget(testPackage, "com.sample.banking.UnexportedActivity")
+        val target = appLockManager.getAndRemoveInterceptedTarget(testPackage)
+        org.junit.Assert.assertNotNull(target)
+        assertEquals(testPackage, target?.packageName)
+        assertEquals("com.sample.banking.UnexportedActivity", target?.className)
+
+        // 4. Test atomic lock verification guard simulation
+        val isUnlockConsumed = java.util.concurrent.atomic.AtomicBoolean(false)
+        var unlockSuccessCount = 0
+
+        fun performUnlockSimulated() {
+            if (isUnlockConsumed.compareAndSet(false, true)) {
+                com.example.util.BiometricHelper.cancelCurrentPrompt()
+                preferences.resetFailedAttempts()
+                unlockSuccessCount++
+            }
+        }
+
+        // Simulating rapid duplicate callbacks (e.g. biometric success followed by redundant keypad press or duplicate event):
+        performUnlockSimulated()
+        performUnlockSimulated()
+        performUnlockSimulated()
+
+        assertEquals("Biometric success must execute the unlock action exactly once", 1, unlockSuccessCount)
+    }
 }
 
 

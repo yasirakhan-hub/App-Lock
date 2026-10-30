@@ -93,7 +93,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.vault.DuplicateVaultItemException
+import com.example.data.vault.InsufficientStorageException
+import com.example.data.vault.OriginalDeletionStatus
 import com.example.data.vault.VaultCategory
+import com.example.data.vault.VaultImportMode
+import com.example.data.vault.VaultIntegrityException
 import com.example.data.vault.VaultItem
 import com.example.data.vault.VaultRepository
 import com.example.ui.common.MainBottomTab
@@ -253,6 +257,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     var importStepIndex by mutableIntStateOf(0)
     var activeImportJob: Job? = null
 
+    var pendingImportMode by mutableStateOf(VaultImportMode.COPY)
+    var showImportSummary by mutableStateOf<ImportSummary?>(null)
     var showImportSuccessDialog by mutableStateOf<List<VaultItem>?>(null)
     var statusMessage by mutableStateOf<String?>(null)
     var isErrorStatus by mutableStateOf(false)
@@ -288,6 +294,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun clearSessionOnExit(onImportInFlightChanged: (Boolean) -> Unit = {}) {
         cancelActiveImport(onImportInFlightChanged)
         showImportSuccessDialog = null
+        showImportSummary = null
         items = emptyList()
         allRecentItems = emptyList()
     }
@@ -297,6 +304,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         mediaLabel: String,
         fallbackCategory: VaultCategory?,
         selectedCategory: VaultCategory,
+        importMode: VaultImportMode,
         onImportInFlightChanged: (Boolean) -> Unit
     ) {
         if (uris.isEmpty()) return
@@ -313,6 +321,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 val importedList = mutableListOf<VaultItem>()
                 var duplicateCount = 0
                 var failureCount = 0
+                var deletedOriginalsCount = 0
+                var retainedOriginalsCount = 0
+                var lastRetentionReason: String? = null
 
                 importStepIndex = 1
                 importProgressPercent = 45
@@ -324,12 +335,39 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     result.onSuccess { importedItem ->
                         importedList.add(importedItem)
+                        if (importMode == VaultImportMode.MOVE) {
+                            val delStatus = repository.deleteOriginalUri(uri)
+                            when (delStatus) {
+                                is OriginalDeletionStatus.Deleted -> deletedOriginalsCount++
+                                is OriginalDeletionStatus.PermissionDenied -> {
+                                    retainedOriginalsCount++
+                                    lastRetentionReason = delStatus.message
+                                }
+                                is OriginalDeletionStatus.NotSupported -> {
+                                    retainedOriginalsCount++
+                                    lastRetentionReason = delStatus.message
+                                }
+                                is OriginalDeletionStatus.Failed -> {
+                                    retainedOriginalsCount++
+                                    lastRetentionReason = delStatus.message
+                                }
+                            }
+                        }
                     }
                     result.onFailure { error ->
-                        if (error is DuplicateVaultItemException) {
-                            duplicateCount++
-                        } else {
-                            failureCount++
+                        when (error) {
+                            is DuplicateVaultItemException -> duplicateCount++
+                            is InsufficientStorageException -> {
+                                failureCount++
+                                isErrorStatus = true
+                                statusMessage = error.message
+                            }
+                            is VaultIntegrityException -> {
+                                failureCount++
+                                isErrorStatus = true
+                                statusMessage = "Integrity check failed: ${error.message}"
+                            }
+                            else -> failureCount++
                         }
                     }
                     importStepIndex = 2
@@ -368,6 +406,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
                 when {
                     importedList.isNotEmpty() -> {
+                        showImportSummary = ImportSummary(
+                            totalImported = importedList.size,
+                            mode = importMode,
+                            deletedOriginalsCount = deletedOriginalsCount,
+                            retainedOriginalsCount = retainedOriginalsCount,
+                            retentionReason = lastRetentionReason
+                        )
                         showImportSuccessDialog = importedList
                         if (failureCount > 0 || duplicateCount > 0) {
                             val parts = mutableListOf<String>()
@@ -387,7 +432,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     failureCount > 0 -> {
                         isErrorStatus = true
-                        statusMessage = "Unable to import selected $mediaLabel. Please verify the file is accessible and not empty."
+                        statusMessage = statusMessage ?: "Unable to import selected $mediaLabel. Please verify file accessibility and storage."
                     }
                     duplicateCount > 0 -> {
                         isErrorStatus = false
@@ -401,6 +446,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 }
+
+data class ImportSummary(
+    val totalImported: Int,
+    val mode: VaultImportMode,
+    val deletedOriginalsCount: Int,
+    val retainedOriginalsCount: Int,
+    val retentionReason: String?
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -454,7 +507,11 @@ fun VaultScreen(
 
     var selectedItemForDetail by remember { mutableStateOf<VaultItem?>(null) }
     var itemToExportId by rememberSaveable { mutableStateOf<String?>(null) }
+    var isMoveExport by rememberSaveable { mutableStateOf(false) }
+    var showExportConfirmRemoveDialog by remember { mutableStateOf<Pair<VaultItem, Long>?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf<VaultItem?>(null) }
+    var showImportModeDialog by remember { mutableStateOf(false) }
+    var showConfirmMoveDialog by remember { mutableStateOf(false) }
     var showImportSuccessDialog by vaultViewModel::showImportSuccessDialog
     var showMenu by remember { mutableStateOf(false) }
 
@@ -479,6 +536,9 @@ fun VaultScreen(
         onDispose {
             selectedItemForDetail = null
             showDeleteConfirmDialog = null
+            showExportConfirmRemoveDialog = null
+            showImportModeDialog = false
+            showConfirmMoveDialog = false
         }
     }
 
@@ -490,9 +550,16 @@ fun VaultScreen(
         }
         if (showDeleteConfirmDialog != null) {
             showDeleteConfirmDialog = null
+        } else if (showExportConfirmRemoveDialog != null) {
+            showExportConfirmRemoveDialog = null
+        } else if (showConfirmMoveDialog) {
+            showConfirmMoveDialog = false
+        } else if (showImportModeDialog) {
+            showImportModeDialog = false
         } else if (selectedItemForDetail != null) {
             selectedItemForDetail = null
-        } else if (showImportSuccessDialog != null) {
+        } else if (vaultViewModel.showImportSummary != null) {
+            vaultViewModel.showImportSummary = null
             showImportSuccessDialog = null
         } else if (isImporting) {
             vaultViewModel.cancelActiveImport(onImportInFlightChanged)
@@ -518,6 +585,7 @@ fun VaultScreen(
             mediaLabel = mediaLabel,
             fallbackCategory = fallbackCategory,
             selectedCategory = selectedCategory,
+            importMode = vaultViewModel.pendingImportMode,
             onImportInFlightChanged = onImportInFlightChanged
         )
     }
@@ -542,15 +610,20 @@ fun VaultScreen(
         onSystemPickerFinished()
         val exportId = itemToExportId
         val item = exportId?.let { id -> repository.getAllItems().find { it.id == id } }
+        val moveMode = isMoveExport
         if (destUri != null && item != null) {
             scope.launch {
                 val res = repository.exportItemToUri(item, destUri)
-                res.onSuccess {
-                    isErrorStatus = false
-                    statusMessage = "Exported '${item.originalFileName}' to device storage."
-                }.onFailure {
+                res.onSuccess { writtenBytes ->
+                    if (moveMode) {
+                        showExportConfirmRemoveDialog = item to writtenBytes
+                    } else {
+                        isErrorStatus = false
+                        statusMessage = "Exported copy of '${item.originalFileName}' ($writtenBytes bytes) to device storage."
+                    }
+                }.onFailure { err ->
                     isErrorStatus = true
-                    statusMessage = "Export failed: Unable to decrypt or write file to destination."
+                    statusMessage = "Export failed: ${err.message ?: "Unable to decrypt or write file to destination."}"
                 }
                 itemToExportId = null
             }
@@ -657,11 +730,17 @@ fun VaultScreen(
     }
 
     // Panel 7: Import Successful Fullscreen View
-    showImportSuccessDialog?.let { importedItems ->
+    vaultViewModel.showImportSummary?.let { summary ->
         ImportSuccessScreen(
-            importedCount = importedItems.size,
-            onViewFiles = { showImportSuccessDialog = null },
-            onDone = { showImportSuccessDialog = null }
+            summary = summary,
+            onViewFiles = {
+                vaultViewModel.showImportSummary = null
+                showImportSuccessDialog = null
+            },
+            onDone = {
+                vaultViewModel.showImportSummary = null
+                showImportSuccessDialog = null
+            }
         )
         return
     }
@@ -872,7 +951,7 @@ fun VaultScreen(
                         if (flatIndex == 0) {
                             // First tile: "+ Import" card matching Panel 5
                             NeoCard(
-                                onClick = { launchPickerForCurrentCategory() },
+                                onClick = { showImportModeDialog = true },
                                 shape = NeoShapes.MediumCard,
                                 accentBorder = NeoPalette.PrimaryGold.copy(alpha = 0.45f),
                                 elevation = 6.dp,
@@ -1060,13 +1139,182 @@ fun VaultScreen(
                 item = item,
                 repository = repository,
                 onDismiss = { selectedItemForDetail = null },
-                onExport = {
+                onExportCopy = {
                     itemToExportId = item.id
+                    isMoveExport = false
+                    onSystemPickerLaunched()
+                    exportLauncher.launch(item.originalFileName)
+                },
+                onExportAndRemove = {
+                    itemToExportId = item.id
+                    isMoveExport = true
                     onSystemPickerLaunched()
                     exportLauncher.launch(item.originalFileName)
                 },
                 onDelete = {
                     showDeleteConfirmDialog = item
+                }
+            )
+        }
+
+        // Export & Remove Confirmation Dialog
+        showExportConfirmRemoveDialog?.let { (item, writtenBytes) ->
+            AlertDialog(
+                onDismissRequest = {
+                    showExportConfirmRemoveDialog = null
+                    statusMessage = "Export verified ($writtenBytes bytes). Vault copy was kept."
+                },
+                containerColor = NeoPalette.SurfaceDark,
+                title = { Text("Remove From Vault?", fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary) },
+                text = {
+                    Text(
+                        "Export of '${item.originalFileName}' was verified ($writtenBytes bytes written).\n\nDo you want to remove the encrypted copy from your Vault now to complete moving it to storage?",
+                        color = NeoPalette.TextSecondary
+                    )
+                },
+                confirmButton = {
+                    NeoButton(
+                        text = "Remove From Vault",
+                        isDestructive = true,
+                        shape = NeoShapes.FullPill,
+                        onClick = {
+                            val targetItem = item
+                            showExportConfirmRemoveDialog = null
+                            selectedItemForDetail = null
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    repository.deleteItem(targetItem)
+                                }
+                                refreshItems()
+                                isErrorStatus = false
+                                statusMessage = "Moved '${targetItem.originalFileName}' to storage and removed from Vault."
+                            }
+                        }
+                    )
+                },
+                dismissButton = {
+                    NeoButton(
+                        text = "Keep in Vault",
+                        shape = NeoShapes.FullPill,
+                        onClick = {
+                            showExportConfirmRemoveDialog = null
+                            isErrorStatus = false
+                            statusMessage = "Export verified. Vault copy was kept."
+                        }
+                    )
+                }
+            )
+        }
+
+        // Import Mode Dialog (Copy vs Move)
+        if (showImportModeDialog) {
+            AlertDialog(
+                onDismissRequest = { showImportModeDialog = false },
+                containerColor = NeoPalette.SurfaceDark,
+                title = { Text("Import to Encrypted Vault", fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "Choose how original files should be handled after encryption:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NeoPalette.TextSecondary
+                        )
+
+                        // Option 1: Copy to Vault
+                        NeoCard(
+                            onClick = {
+                                showImportModeDialog = false
+                                vaultViewModel.pendingImportMode = VaultImportMode.COPY
+                                launchPickerForCurrentCategory()
+                            },
+                            shape = NeoShapes.MediumCard,
+                            accentBorder = NeoPalette.PrimaryGold.copy(alpha = 0.5f),
+                            contentPadding = PaddingValues(14.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("vault_import_mode_copy")
+                        ) {
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Lock, contentDescription = null, tint = NeoPalette.PrimaryGold, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Copy to Vault (Recommended)", fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary, fontSize = 14.sp)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "Creates an encrypted copy in the private Vault. The original remains untouched in your Gallery and File Manager.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NeoPalette.TextSecondary
+                                )
+                            }
+                        }
+
+                        // Option 2: Move to Vault
+                        NeoCard(
+                            onClick = {
+                                showImportModeDialog = false
+                                showConfirmMoveDialog = true
+                            },
+                            shape = NeoShapes.MediumCard,
+                            contentPadding = PaddingValues(14.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("vault_import_mode_move")
+                        ) {
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Restore, contentDescription = null, tint = NeoPalette.SecondaryAmber, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Move to Vault", fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary, fontSize = 14.sp)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "Encrypts into the Vault and requests deletion of the original file from device storage after verification.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NeoPalette.TextSecondary
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    NeoButton(
+                        text = "Cancel",
+                        shape = NeoShapes.FullPill,
+                        onClick = { showImportModeDialog = false }
+                    )
+                }
+            )
+        }
+
+        // Move Confirmation Dialog
+        if (showConfirmMoveDialog) {
+            AlertDialog(
+                onDismissRequest = { showConfirmMoveDialog = false },
+                containerColor = NeoPalette.SurfaceDark,
+                title = { Text("Confirm Move Operation", fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary) },
+                text = {
+                    Text(
+                        "In Move mode, selected files will be encrypted into your private Vault, verified for cryptographic integrity, and then deleted from external storage.\n\nNote: If Android system permissions or a read-only document provider prevent deletion, the original will be retained safely and you will be informed.",
+                        color = NeoPalette.TextSecondary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    NeoButton(
+                        text = "Proceed with Move",
+                        isPrimaryGlowing = true,
+                        shape = NeoShapes.FullPill,
+                        onClick = {
+                            showConfirmMoveDialog = false
+                            vaultViewModel.pendingImportMode = VaultImportMode.MOVE
+                            launchPickerForCurrentCategory()
+                        }
+                    )
+                },
+                dismissButton = {
+                    NeoButton(
+                        text = "Cancel",
+                        shape = NeoShapes.FullPill,
+                        onClick = { showConfirmMoveDialog = false }
+                    )
                 }
             )
         }
@@ -1280,10 +1528,25 @@ private fun ImportingFilesScreen(
  */
 @Composable
 private fun ImportSuccessScreen(
-    importedCount: Int,
+    summary: ImportSummary,
     onViewFiles: () -> Unit,
     onDone: () -> Unit
 ) {
+    val isMove = summary.mode == VaultImportMode.MOVE
+    val hasRetained = summary.retainedOriginalsCount > 0
+
+    val (headlinePrefix, headlineSuffix) = when {
+        !isMove -> "Copy " to "Successful!"
+        !hasRetained -> "Move " to "Successful!"
+        else -> "Files " to "Encrypted!"
+    }
+
+    val description = when {
+        !isMove -> "Your files (${summary.totalImported}) are safely encrypted in the private Vault.\n\nOriginal files remain in your Gallery and File Manager."
+        !hasRetained -> "Your files (${summary.totalImported}) are safely encrypted in the private Vault, and original files were removed from device storage."
+        else -> "${summary.totalImported} file(s) safely encrypted and verified in Vault.\n\n⚠️ Original files (${summary.retainedOriginalsCount}) could not be deleted automatically by Android (${summary.retentionReason ?: "system permission or read-only provider limitation"}).\n\nPlease delete original files manually from your Gallery to finish hiding them."
+    }
+
     Scaffold(
         containerColor = NeoPalette.BackgroundBase
     ) { innerPadding ->
@@ -1364,10 +1627,10 @@ private fun ImportSuccessScreen(
             Text(
                 text = buildAnnotatedString {
                     withStyle(SpanStyle(color = NeoPalette.PrimaryGold, fontWeight = FontWeight.ExtraBold)) {
-                        append("Import ")
+                        append(headlinePrefix)
                     }
                     withStyle(SpanStyle(color = NeoPalette.TextPrimary, fontWeight = FontWeight.ExtraBold)) {
-                        append("Successful!")
+                        append(headlineSuffix)
                     }
                 },
                 fontSize = 26.sp,
@@ -1377,9 +1640,9 @@ private fun ImportSuccessScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "Your files ($importedCount) are now safely stored in the secure vault.",
+                text = description,
                 style = MaterialTheme.typography.bodyMedium,
-                color = NeoPalette.TextSecondary,
+                color = if (hasRetained && isMove) NeoPalette.SecondaryAmber else NeoPalette.TextSecondary,
                 textAlign = TextAlign.Center
             )
 
@@ -1587,7 +1850,8 @@ private fun ItemDetailModal(
     item: VaultItem,
     repository: VaultRepository,
     onDismiss: () -> Unit,
-    onExport: () -> Unit,
+    onExportCopy: () -> Unit,
+    onExportAndRemove: () -> Unit,
     onDelete: () -> Unit
 ) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1680,27 +1944,40 @@ private fun ItemDetailModal(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 NeoButton(
-                    text = "Export",
+                    text = "Export Copy to Storage",
                     icon = Icons.Default.FileDownload,
                     isPrimaryGlowing = true,
-                    onClick = onExport,
+                    onClick = onExportCopy,
                     shape = NeoShapes.FullPill,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth().testTag("vault_item_export_copy")
                 )
 
-                NeoButton(
-                    text = "Delete",
-                    icon = Icons.Default.Delete,
-                    isDestructive = true,
-                    onClick = onDelete,
-                    shape = NeoShapes.FullPill,
-                    modifier = Modifier.weight(1f)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    NeoButton(
+                        text = "Move to Storage",
+                        icon = Icons.Default.Restore,
+                        onClick = onExportAndRemove,
+                        shape = NeoShapes.FullPill,
+                        modifier = Modifier.weight(1f).testTag("vault_item_move_storage")
+                    )
+
+                    NeoButton(
+                        text = "Delete",
+                        icon = Icons.Default.Delete,
+                        isDestructive = true,
+                        onClick = onDelete,
+                        shape = NeoShapes.FullPill,
+                        modifier = Modifier.weight(1f).testTag("vault_item_delete")
+                    )
+                }
             }
         }
     }

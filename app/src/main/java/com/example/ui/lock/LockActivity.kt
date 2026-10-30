@@ -120,7 +120,10 @@ class LockActivity : FragmentActivity() {
                     onUnlockSuccess = {
                         if (!isTestMode && targetPackage.isNotBlank()) {
                             appLockManager.onPackageUnlocked(targetPackage)
-                            appLockManager.launchInterceptedTarget(this@LockActivity, targetPackage)
+                            // For Self App Info, just finish LockActivity so user lands directly on App Info
+                            if (targetPackage != packageName) {
+                                appLockManager.launchInterceptedTarget(this@LockActivity, targetPackage)
+                            }
                         }
                         finish()
                     },
@@ -132,7 +135,21 @@ class LockActivity : FragmentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE) ?: ""
+        val targetClass = intent.getStringExtra(EXTRA_TARGET_CLASS)
+        val isTestMode = intent.getBooleanExtra(EXTRA_IS_TEST_MODE, false)
+        val isDeactivateAdmin = intent.getBooleanExtra(EXTRA_ACTION_DEACTIVATE_ADMIN, false)
+
+        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank()) {
+            appLockManager.storeInterceptedTarget(targetPackage, targetClass)
+        }
+    }
+
     override fun onDestroy() {
+        BiometricHelper.cancelCurrentPrompt()
         appLockManager.isLockActivityActive = false
         super.onDestroy()
     }
@@ -184,22 +201,33 @@ class LockActivity : FragmentActivity() {
             AuthMethod.PASSWORD -> "Use Password"
         }
 
+        val isUnlocked = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+        fun performUnlock() {
+            if (isUnlocked.compareAndSet(false, true)) {
+                BiometricHelper.cancelCurrentPrompt()
+                prefs.resetFailedAttempts()
+                onUnlockSuccess()
+            }
+        }
+
         fun triggerBiometricPrompt() {
-            if (isBiometricEnabled && lockoutSeconds == 0) {
+            if (isBiometricEnabled && lockoutSeconds == 0 && !isUnlocked.get()) {
                 BiometricHelper.showBiometricPrompt(
                     activity = this@LockActivity,
                     title = "Unlock $targetAppName",
                     subtitle = "Touch the fingerprint sensor to unlock",
                     negativeButtonText = negativeBtnText,
                     onSuccess = {
-                        prefs.resetFailedAttempts()
-                        onUnlockSuccess()
+                        performUnlock()
                     },
                     onError = { errorCode, _ ->
-                        if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
-                            errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
-                        ) {
-                            errorMessage = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                        if (!isUnlocked.get()) {
+                            if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
+                                errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
+                            ) {
+                                errorMessage = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                            }
                         }
                     }
                 )
@@ -207,6 +235,7 @@ class LockActivity : FragmentActivity() {
         }
 
         fun recordFailure(label: String) {
+            if (isUnlocked.get()) return
             isError = true
             prefs.recordFailedAttempt()
             lockoutSeconds = prefs.getRemainingLockoutSeconds()
@@ -218,10 +247,18 @@ class LockActivity : FragmentActivity() {
             }
         }
 
+        androidx.compose.runtime.DisposableEffect(Unit) {
+            onDispose {
+                BiometricHelper.cancelCurrentPrompt()
+            }
+        }
+
         LaunchedEffect(Unit) {
-            if (isBiometricEnabled && lockoutSeconds == 0) {
+            if (isBiometricEnabled && lockoutSeconds == 0 && !isUnlocked.get()) {
                 delay(300L)
-                triggerBiometricPrompt()
+                if (!isUnlocked.get()) {
+                    triggerBiometricPrompt()
+                }
             }
         }
 
@@ -352,8 +389,7 @@ class LockActivity : FragmentActivity() {
                                         scope.launch {
                                             val isCorrect = prefs.verifyCredential(newPin)
                                             if (isCorrect) {
-                                                prefs.resetFailedAttempts()
-                                                onUnlockSuccess()
+                                                performUnlock()
                                             } else {
                                                 recordFailure("PIN")
                                                 delay(400L)
@@ -425,8 +461,7 @@ class LockActivity : FragmentActivity() {
                                 onPatternComplete = { pattern ->
                                     if (lockoutSeconds > 0) return@PatternLockGrid
                                     if (prefs.verifyCredential(pattern)) {
-                                        prefs.resetFailedAttempts()
-                                        onUnlockSuccess()
+                                        performUnlock()
                                     } else {
                                         recordFailure("pattern")
                                     }
@@ -479,8 +514,7 @@ class LockActivity : FragmentActivity() {
                                         return@PasswordAuthInput
                                     }
                                     if (prefs.verifyCredential(enteredPassword)) {
-                                        prefs.resetFailedAttempts()
-                                        onUnlockSuccess()
+                                        performUnlock()
                                     } else {
                                         recordFailure("password")
                                         enteredPassword = ""

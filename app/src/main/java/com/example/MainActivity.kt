@@ -744,22 +744,33 @@ fun DashboardAuthGate(
         AuthMethod.PASSWORD -> "Use Password"
     }
 
+    val isUnlocked = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+    fun performUnlock() {
+        if (isUnlocked.compareAndSet(false, true)) {
+            BiometricHelper.cancelCurrentPrompt()
+            prefs.resetFailedAttempts()
+            onUnlockSuccess()
+        }
+    }
+
     fun triggerBiometricPrompt() {
-        if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
+        if (activity != null && isBiometricEnabled && lockoutSeconds == 0 && !isUnlocked.get()) {
             BiometricHelper.showBiometricPrompt(
                 activity = activity,
                 title = resolvedTitle,
                 subtitle = subtitle,
                 negativeButtonText = negativeButtonLabel,
                 onSuccess = {
-                    prefs.resetFailedAttempts()
-                    onUnlockSuccess()
+                    performUnlock()
                 },
                 onError = { errorCode, _ ->
-                    if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
-                        errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
-                    ) {
-                        errorMsg = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                    if (!isUnlocked.get()) {
+                        if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
+                            errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
+                        ) {
+                            errorMsg = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                        }
                     }
                 }
             )
@@ -767,6 +778,7 @@ fun DashboardAuthGate(
     }
 
     fun recordFailedAttemptWithMessage(defaultMessage: String) {
+        if (isUnlocked.get()) return
         isError = true
         prefs.recordFailedAttempt()
         lockoutSeconds = prefs.getRemainingLockoutSeconds()
@@ -777,10 +789,18 @@ fun DashboardAuthGate(
         }
     }
 
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            BiometricHelper.cancelCurrentPrompt()
+        }
+    }
+
     LaunchedEffect(Unit) {
-        if (isBiometricEnabled && lockoutSeconds == 0) {
+        if (isBiometricEnabled && lockoutSeconds == 0 && !isUnlocked.get()) {
             delay(250L)
-            triggerBiometricPrompt()
+            if (!isUnlocked.get()) {
+                triggerBiometricPrompt()
+            }
         }
     }
 
@@ -904,8 +924,7 @@ fun DashboardAuthGate(
                                 if (next.length == pinLength) {
                                     scope.launch {
                                         if (prefs.verifyCredential(next)) {
-                                            prefs.resetFailedAttempts()
-                                            onUnlockSuccess()
+                                            performUnlock()
                                         } else {
                                             recordFailedAttemptWithMessage("Incorrect PIN")
                                             delay(400L)
@@ -959,8 +978,7 @@ fun DashboardAuthGate(
                             onPatternComplete = { drawnPattern ->
                                 if (lockoutSeconds > 0) return@PatternLockGrid
                                 if (prefs.verifyCredential(drawnPattern)) {
-                                    prefs.resetFailedAttempts()
-                                    onUnlockSuccess()
+                                    performUnlock()
                                 } else {
                                     recordFailedAttemptWithMessage("Incorrect pattern")
                                 }
@@ -998,8 +1016,7 @@ fun DashboardAuthGate(
                                     return@PasswordAuthInput
                                 }
                                 if (prefs.verifyCredential(enteredPassword)) {
-                                    prefs.resetFailedAttempts()
-                                    onUnlockSuccess()
+                                    performUnlock()
                                 } else {
                                     recordFailedAttemptWithMessage("Incorrect password")
                                     enteredPassword = ""

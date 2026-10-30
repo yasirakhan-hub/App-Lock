@@ -65,6 +65,7 @@
             android:exported="false"
             android:taskAffinity=""
             android:excludeFromRecents="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.SecureAppLock.LockOverlay"
             android:windowSoftInputMode="stateAlwaysHidden" />
 

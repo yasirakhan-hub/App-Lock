@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.view.inputmethod.InputMethodManager
 import com.example.data.security.AppLockPreferences
 import com.example.ui.lock.LockActivity
 import java.util.Collections
@@ -25,7 +26,7 @@ data class InterceptedTarget(
             try {
                 val explicitIntent = Intent().apply {
                     setClassName(packageName, className)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
                 val resolveInfo = packageManager.resolveActivity(explicitIntent, PackageManager.MATCH_DEFAULT_ONLY)
                 if (resolveInfo != null) {
@@ -37,7 +38,7 @@ data class InterceptedTarget(
 
         // Fallback to the package's default launcher Intent
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-        launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return launchIntent
     }
 }
@@ -77,8 +78,27 @@ class AppLockManager private constructor(private val context: Context) {
     @Volatile
     private var cachedLauncherPackage: String? = null
 
-    // Cache launcher status for secondary package activity queries to eliminate repeated PackageManager IPC queries
-    private val launcherPackageCache = ConcurrentHashMap<String, Boolean>()
+    @Volatile
+    private var cachedImePackages: Set<String>? = null
+
+    @Volatile
+    private var lastImeCacheTimestamp: Long = 0L
+
+    @Volatile
+    var isRecentsOverviewActive: Boolean = false
+        private set
+
+    @Volatile
+    private var lastRecentsOverviewTimestamp: Long = 0L
+
+    @Volatile
+    private var lastLauncherExitTimestamp: Long = 0L
+
+    @Volatile
+    private var pendingExitPackage: String? = null
+
+    @Volatile
+    private var pendingExitTimestamp: Long = 0L
 
     companion object {
         @Volatile
@@ -102,6 +122,61 @@ class AppLockManager private constructor(private val context: Context) {
 
         private const val LAUNCH_DEBOUNCE_MS = 600L
         private const val SYSTEM_PICKER_GRACE_MS = 3000L
+        private const val RECENTS_GRACE_WINDOW_MS = 1200L
+        private const val IME_CACHE_TTL_MS = 30000L
+
+        val KNOWN_IME_PACKAGES = setOf(
+            "com.google.android.inputmethod.latin", // Gboard
+            "com.touchtype.swiftkey", // SwiftKey
+            "com.samsung.android.honeyboard", // Samsung Keyboard
+            "com.baidu.input_mi", // Xiaomi Baidu IME
+            "com.sohu.inputmethod.sogou", // Sogou IME
+            "com.emoji.keyboard.touchpal",
+            "com.syntellia.fleksy.keyboard",
+            "com.sec.android.inputmethod",
+            "com.oppo.keyboard"
+        )
+
+        val SYSTEM_PERMISSION_RESOLVER_PACKAGES = setOf(
+            "com.google.android.permissioncontroller",
+            "com.android.permissioncontroller",
+            "com.android.intentresolver",
+            "com.google.android.intentresolver",
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller",
+            "com.samsung.android.packageinstaller"
+        )
+
+        val SYSTEM_PICKER_PACKAGES = setOf(
+            "com.android.documentsui",
+            "com.google.android.documentsui",
+            "com.android.providers.media.module",
+            "com.google.android.providers.media.module",
+            "com.android.providers.media",
+            "com.google.android.providers.media",
+            "com.android.intentresolver",
+            "com.google.android.intentresolver",
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller"
+        )
+
+        val KNOWN_OEM_LAUNCHERS = setOf(
+            "com.google.android.apps.nexuslauncher", // Pixel Launcher
+            "com.android.launcher3", // AOSP Launcher3
+            "com.sec.android.app.launcher", // Samsung One UI Home
+            "com.miui.home", // Xiaomi HyperOS / MIUI Launcher
+            "com.oppo.launcher", // OPPO ColorOS Launcher
+            "com.bbk.launcher2", // Vivo FuntouchOS Launcher
+            "com.vivo.launcher", // Vivo Launcher
+            "com.motorola.launcher3", // Motorola My UX Launcher
+            "net.oneplus.launcher", // OnePlus OxygenOS Launcher
+            "com.huawei.android.launcher", // Huawei EMUI / HarmonyOS
+            "com.transsion.hilauncher", // Tecno / Infinix HiOS
+            "com.teslacoilsw.launcher", // Nova Launcher
+            "com.microsoft.launcher", // Microsoft Launcher
+            "com.actionlauncher.playstore", // Action Launcher
+            "com.smartlauncher" // Smart Launcher
+        )
     }
 
     /**
@@ -130,6 +205,14 @@ class AppLockManager private constructor(private val context: Context) {
     }
 
     /**
+     * Called by AccessibilityService when user enters the Recent Apps overview.
+     */
+    fun onRecentsOverviewEntered() {
+        isRecentsOverviewActive = true
+        lastRecentsOverviewTimestamp = System.currentTimeMillis()
+    }
+
+    /**
      * Called whenever a foreground window state change is detected by the AccessibilityService.
      */
     fun onForegroundPackageChanged(newPackage: String, className: String? = null) {
@@ -145,16 +228,77 @@ class AppLockManager private constructor(private val context: Context) {
             return
         }
 
-        val previous = currentForegroundPackage
-        currentForegroundPackage = newPackage
+        // 1. Transient UI elements (keyboards, system UI volume/status bars, autofill, permission controllers):
+        // NEVER treat transient overlays as leaving the current protected app!
+        // This ensures Instagram Stories, Chats, keyboard toggles, and volume panels
+        // never reset or evict the active authenticated session.
+        if (isTransientSystemOrOverlayPackage(newPackage)) {
+            return
+        }
 
-        // If relocking immediately on app exit:
-        // When user leaves a previously unlocked app to a launcher or another app, relock it
-        if (!preferences.isRelockOnScreenOff() && previous != null && previous != newPackage && previous != context.packageName) {
+        val previous = currentForegroundPackage
+        val isLauncher = isLauncherOrSystemUI(newPackage)
+        val isRecents = isRecentsOrOverview(newPackage, className)
+
+        // 2. Recent Apps Overview entered:
+        if (isRecents) {
+            isRecentsOverviewActive = true
+            lastRecentsOverviewTimestamp = System.currentTimeMillis()
+            return
+        }
+
+        // 3. User is on Home screen or Launcher:
+        if (isLauncher) {
+            isRecentsOverviewActive = false
+            currentForegroundPackage = newPackage
+            lastLauncherExitTimestamp = System.currentTimeMillis()
+
+            // If immediate relock on exit is enabled:
+            // Stage previous app for relock, but allow a grace period so gesture
+            // navigation into Recent Apps overview does NOT falsely lock the app!
+            if (!preferences.isRelockOnScreenOff() && previous != null &&
+                previous != newPackage && !isLauncherOrSystemUI(previous) && !isTransientSystemOrOverlayPackage(previous)
+            ) {
+                pendingExitPackage = previous
+                pendingExitTimestamp = System.currentTimeMillis()
+            }
+            return
+        }
+
+        // 4. We are entering a real application (e.g., Instagram, WhatsApp, Banking app, Settings, etc.):
+        isRecentsOverviewActive = false
+        val now = System.currentTimeMillis()
+
+        // If user switched directly to a DIFFERENT real app (App A -> App B):
+        if (!preferences.isRelockOnScreenOff() && previous != null &&
+            previous != newPackage && !isLauncherOrSystemUI(previous) && !isTransientSystemOrOverlayPackage(previous)
+        ) {
             unlockedPackages.remove(previous)
         }
 
-        if (shouldLock(newPackage)) {
+        // Handle pending exit package from recent launcher transition:
+        val pendingExit = pendingExitPackage
+        if (pendingExit != null) {
+            if (pendingExit != newPackage) {
+                // User opened a different app: immediately relock the previous app
+                unlockedPackages.remove(pendingExit)
+                pendingExitPackage = null
+            } else {
+                // User returned to the same app:
+                // Check if user stayed away on launcher longer than the gesture/recents grace window
+                val elapsedSinceExit = now - pendingExitTimestamp
+                if (elapsedSinceExit > RECENTS_GRACE_WINDOW_MS) {
+                    // Truly left and stayed out: relock
+                    unlockedPackages.remove(newPackage)
+                }
+                // Otherwise: quick gesture or returned from Recents within grace window: keep unlocked!
+                pendingExitPackage = null
+            }
+        }
+
+        currentForegroundPackage = newPackage
+
+        if (shouldLock(newPackage, className)) {
             // Store the intercepted target intent before launching LockActivity
             storeInterceptedTarget(newPackage, className)
             launchLockScreen(newPackage, className)
@@ -183,7 +327,7 @@ class AppLockManager private constructor(private val context: Context) {
         val intercepted = getAndRemoveInterceptedTarget(packageName)
         val intent = intercepted?.createLaunchIntent(context.packageManager)
             ?: context.packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
 
         return if (intent != null) {
@@ -191,7 +335,21 @@ class AppLockManager private constructor(private val context: Context) {
                 context.startActivity(intent)
                 true
             } catch (_: Exception) {
-                false
+                // If starting the explicit intercepted activity failed (e.g. unexported component),
+                // fallback to the package's default root launch intent
+                val fallbackIntent = context.packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                if (fallbackIntent != null) {
+                    try {
+                        context.startActivity(fallbackIntent)
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                } else {
+                    false
+                }
             }
         } else {
             false
@@ -199,14 +357,37 @@ class AppLockManager private constructor(private val context: Context) {
     }
 
     /**
+     * Checks if a package is currently authenticated/unlocked in this session.
+     */
+    fun isPackageUnlocked(packageName: String): Boolean {
+        return unlockedPackages.contains(packageName)
+    }
+
+    /**
+     * Checks if Smart AppLock's self App Info screen has been unlocked in this session.
+     */
+    fun isSelfAppInfoUnlocked(): Boolean {
+        return unlockedPackages.contains(context.packageName)
+    }
+
+    /**
+     * Records that Smart AppLock's self App Info screen was unlocked.
+     */
+    fun onSelfAppInfoUnlocked() {
+        unlockedPackages.add(context.packageName)
+    }
+
+    /**
      * Determines whether the given package should prompt for authentication.
      */
-    fun shouldLock(packageName: String): Boolean {
+    fun shouldLock(packageName: String, className: String? = null): Boolean {
         if (!isProtectionActive()) return false
         if (packageName == context.packageName) return false
         if (isSystemPickerBypassActive()) return false
         if (isSystemDocumentOrMediaPicker(packageName)) return false
+        if (isTransientSystemOrOverlayPackage(packageName)) return false
         if (isLauncherOrSystemUI(packageName)) return false
+        if (isRecentsOverviewActive || isRecentsOrOverview(packageName, className)) return false
         if (!preferences.isPackageProtected(packageName)) return false
         if (unlockedPackages.contains(packageName)) return false
 
@@ -250,6 +431,9 @@ class AppLockManager private constructor(private val context: Context) {
     fun onScreenOff() {
         unlockedPackages.clear()
         pendingInterceptedTargets.clear()
+        pendingExitPackage = null
+        pendingExitTimestamp = 0L
+        isRecentsOverviewActive = false
     }
 
     /**
@@ -258,6 +442,9 @@ class AppLockManager private constructor(private val context: Context) {
     fun lockAll() {
         unlockedPackages.clear()
         pendingInterceptedTargets.clear()
+        pendingExitPackage = null
+        pendingExitTimestamp = 0L
+        isRecentsOverviewActive = false
         invalidateLauncherCache()
     }
 
@@ -266,18 +453,81 @@ class AppLockManager private constructor(private val context: Context) {
      */
     fun invalidateLauncherCache() {
         cachedLauncherPackage = null
-        launcherPackageCache.clear()
+    }
+
+    /**
+     * Checks if the window state belongs to an Input Method (soft keyboard).
+     * Soft keyboard show/hide events must NEVER evict the active session of
+     * the underlying protected app (e.g. typing comments or messages in Instagram).
+     */
+    fun isInputMethodPackage(packageName: String): Boolean {
+        if (isKnownImePackage(packageName)) return true
+
+        val now = System.currentTimeMillis()
+        val cached = cachedImePackages
+        if (cached != null && (now - lastImeCacheTimestamp) < IME_CACHE_TTL_MS) {
+            return cached.contains(packageName)
+        }
+
+        return try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            val imes = imm?.inputMethodList?.map { it.packageName }?.toSet() ?: emptySet()
+            cachedImePackages = imes
+            lastImeCacheTimestamp = now
+            imes.contains(packageName)
+        } catch (_: Exception) {
+            isKnownImePackage(packageName)
+        }
+    }
+
+    /**
+     * Fallback lookup of common OEM keyboard package names.
+     */
+    fun isKnownImePackage(packageName: String): Boolean {
+        return packageName in KNOWN_IME_PACKAGES
+    }
+
+    /**
+     * Transient system overlays such as keyboards, volume panels, heads-up notifications,
+     * autofill dialogs, and permission popups.
+     */
+    fun isTransientSystemOrOverlayPackage(packageName: String): Boolean {
+        if (packageName == "com.android.systemui") return true
+        if (packageName == "android") return true
+        if (isInputMethodPackage(packageName)) return true
+        if (isSystemPermissionOrResolverPackage(packageName)) return true
+        return false
+    }
+
+    /**
+     * Identifies system permission dialogues, package installers, and intent choosers.
+     */
+    fun isSystemPermissionOrResolverPackage(packageName: String): Boolean {
+        return packageName in SYSTEM_PERMISSION_RESOLVER_PACKAGES
+    }
+
+    /**
+     * Checks whether an event corresponds to Android Recent Apps (Overview).
+     */
+    fun isRecentsOrOverview(packageName: String, className: String?): Boolean {
+        if (className != null) {
+            val lower = className.lowercase()
+            if (lower.contains("recents") || lower.contains("quickstep") || lower.contains("overview")) {
+                return true
+            }
+        }
+        return false
     }
 
     /**
      * Identifies known home launchers or system UI to avoid locking essential navigation.
      * Caches the home launcher package name in memory to eliminate expensive synchronous
      * PackageManager IPC/Binder calls on every foreground window state change.
-     * Performance impact: Reduces launcher check latency from ~1-5ms (Binder IPC) to <1µs in-memory check.
      */
     fun isLauncherOrSystemUI(packageName: String): Boolean {
         if (packageName == "com.android.systemui") return true
         if (packageName == "android") return true
+        if (packageName in KNOWN_OEM_LAUNCHERS) return true
 
         val launcherPkg = cachedLauncherPackage ?: synchronized(this) {
             cachedLauncherPackage ?: try {
@@ -293,18 +543,13 @@ class AppLockManager private constructor(private val context: Context) {
 
         if (packageName == launcherPkg) return true
 
-        // Fallback check: check if the package explicitly provides a CATEGORY_HOME launcher activity.
-        // Caches results per packageName in memory to eliminate expensive synchronous PackageManager IPC
-        // on every AccessibilityEvent foreground window state check for non-primary launcher apps.
-        // Performance impact: Reduces secondary check latency from ~1-5ms (Binder IPC) to <1µs in-memory check.
-        return launcherPackageCache.computeIfAbsent(packageName) { pkg ->
-            try {
-                val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(pkg)
-                val activities = context.packageManager.queryIntentActivities(homeIntent, 0)
-                activities.isNotEmpty()
-            } catch (_: Exception) {
-                false
-            }
+        // Fallback check: check if the package explicitly provides a CATEGORY_HOME launcher activity
+        return try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(packageName)
+            val activities = context.packageManager.queryIntentActivities(homeIntent, 0)
+            activities.isNotEmpty()
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -322,15 +567,6 @@ class AppLockManager private constructor(private val context: Context) {
      * so they are never intercepted by the app-lock overlay.
      */
     fun isSystemDocumentOrMediaPicker(packageName: String): Boolean {
-        return packageName == "com.android.documentsui" ||
-                packageName == "com.google.android.documentsui" ||
-                packageName == "com.android.providers.media.module" ||
-                packageName == "com.google.android.providers.media.module" ||
-                packageName == "com.android.providers.media" ||
-                packageName == "com.google.android.providers.media" ||
-                packageName == "com.android.intentresolver" ||
-                packageName == "com.google.android.intentresolver" ||
-                packageName == "com.android.permissioncontroller" ||
-                packageName == "com.google.android.permissioncontroller"
+        return packageName in SYSTEM_PICKER_PACKAGES
     }
 }

@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.vault.DuplicateVaultItemException
+import com.example.data.vault.OriginalDeletionStatus
 import com.example.data.vault.VaultCategory
 import com.example.data.vault.VaultCryptoEngine
+import com.example.data.vault.VaultImportMode
+import com.example.data.vault.VaultIntegrityException
 import com.example.data.vault.VaultItem
 import com.example.data.vault.VaultRepository
 import kotlinx.coroutines.runBlocking
@@ -324,5 +327,81 @@ class VaultCryptoTest {
 
         assertEquals(1, repository.getItemCount(VaultCategory.PICTURE))
         assertEquals(2, repository.getItemCount(VaultCategory.VIDEO))
+    }
+
+    @Test
+    fun testPhase3ImportCopyVsMoveAndIntegrityVerification() = runBlocking {
+        val repository = VaultRepository(context)
+
+        // 1. Copy Mode Test:
+        // Original source file must be verified and remain completely untouched.
+        val copySourceFile = File(context.cacheDir, "family_vacation.jpg").apply {
+            writeBytes(ByteArray(8192) { (it * 7 % 256).toByte() })
+        }
+        val copyResult = repository.importFromUri(
+            uri = Uri.fromFile(copySourceFile),
+            preferredName = "family_vacation.jpg",
+            fallbackCategory = VaultCategory.PICTURE
+        )
+        assertTrue("Copy mode import must succeed", copyResult.isSuccess)
+        val copyItem = copyResult.getOrThrow()
+        assertEquals(VaultCategory.PICTURE, copyItem.category)
+        assertTrue("In Copy mode, original source file must remain untouched", copySourceFile.exists())
+
+        // Verify cryptographic integrity of encrypted vault file:
+        // Length must be exactly payload (8192) + magic (4) + IV (12) + GCM tag (16) = 8224 bytes
+        val encFile = repository.getEncryptedFile(copyItem)
+        assertTrue(encFile.exists())
+        assertEquals(8192L + 32L, encFile.length())
+
+        // 2. Move Mode Test:
+        // Original file must be deleted only after successful and verified import
+        val moveSourceFile = File(context.cacheDir, "tax_record_2025.pdf").apply {
+            writeBytes(ByteArray(4096) { (it * 13 % 256).toByte() })
+        }
+        val moveResult = repository.importFromUri(
+            uri = Uri.fromFile(moveSourceFile),
+            preferredName = "tax_record_2025.pdf",
+            fallbackCategory = VaultCategory.DOCUMENT
+        )
+        assertTrue("Move mode import must succeed", moveResult.isSuccess)
+        val moveItem = moveResult.getOrThrow()
+
+        // Attempt deletion of original after verified import:
+        val deletionStatus = repository.deleteOriginalUri(Uri.fromFile(moveSourceFile))
+        assertEquals("deleteOriginalUri must confirm deletion", OriginalDeletionStatus.Deleted, deletionStatus)
+        assertFalse("Original file must be removed after Move confirmation", moveSourceFile.exists())
+        assertTrue("Vault copy must exist and be intact", repository.getEncryptedFile(moveItem).exists())
+    }
+
+    @Test
+    fun testPhase3ExportCopyAndMoveExportVerification() = runBlocking {
+        val repository = VaultRepository(context)
+
+        val sourceDoc = File(context.cacheDir, "secret_notes.txt").apply {
+            writeText("Encrypted Vault Secret Notes for Export & Restore Testing")
+        }
+        val rawSize = sourceDoc.length()
+        val importRes = repository.importFromUri(Uri.fromFile(sourceDoc))
+        assertTrue(importRes.isSuccess)
+        val vaultItem = importRes.getOrThrow()
+
+        // 1. Export (Copy):
+        val destCopyFile = File(context.cacheDir, "exported_secret_notes.txt")
+        val exportResult = repository.exportItemToUri(vaultItem, Uri.fromFile(destCopyFile))
+        assertTrue("Export must succeed", exportResult.isSuccess)
+        assertEquals(rawSize, exportResult.getOrNull())
+        assertEquals(rawSize, destCopyFile.length())
+        assertTrue("In Export (Copy), Vault copy must remain intact", repository.getEncryptedFile(vaultItem).exists())
+
+        // 2. Move / Export and Remove:
+        // Destination file is verified, and only after successful export is the Vault copy removed
+        val destMoveFile = File(context.cacheDir, "moved_secret_notes.txt")
+        val moveExportResult = repository.exportAndRemoveItem(vaultItem, Uri.fromFile(destMoveFile))
+        assertTrue("Move export must succeed", moveExportResult.isSuccess)
+        assertEquals(rawSize, moveExportResult.getOrNull())
+        assertEquals(rawSize, destMoveFile.length())
+        assertFalse("Vault copy must be removed after exportAndRemoveItem", repository.getEncryptedFile(vaultItem).exists())
+        assertEquals(0, repository.getItemCount(VaultCategory.DOCUMENT))
     }
 }
