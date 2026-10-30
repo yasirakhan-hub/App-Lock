@@ -116,9 +116,9 @@ fun DashboardScreen(
     LaunchedEffect(Unit) {
         val protectedSet = prefs.getProtectedPackages()
         protectedCount = protectedSet.size
-        val installed = runCatching { appDiscoveryRepository.getInstalledLaunchableApps(protectedSet) }.getOrNull()
-        if (!installed.isNullOrEmpty()) {
-            totalAppsCount = installed.size
+        val count = runCatching { appDiscoveryRepository.getInstalledLaunchableAppsCount() }.getOrNull()
+        if (count != null && count > 0) {
+            totalAppsCount = count
         }
     }
 

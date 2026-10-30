@@ -19,8 +19,11 @@ class AppLockApplication : Application() {
         super.onCreate()
         AppLockManager.getInstance(this)
 
-        // Register screen off listener dynamically (required on Android 8+)
-        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        // Register screen off and battery saver listeners dynamically (required on Android 8+)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(screenReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {

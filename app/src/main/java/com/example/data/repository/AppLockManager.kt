@@ -78,6 +78,9 @@ class AppLockManager private constructor(private val context: Context) {
     @Volatile
     private var cachedLauncherPackage: String? = null
 
+    // Thread-safe cache of secondary/fallback launcher package queries to avoid repeated synchronous Binder IPC
+    private val secondaryLauncherCache = ConcurrentHashMap<String, Boolean>()
+
     @Volatile
     private var cachedImePackages: Set<String>? = null
 
@@ -215,7 +218,7 @@ class AppLockManager private constructor(private val context: Context) {
     /**
      * Called whenever a foreground window state change is detected by the AccessibilityService.
      */
-    fun onForegroundPackageChanged(newPackage: String, className: String? = null) {
+    fun onForegroundPackageChanged(newPackage: String, className: String? = null, launchContext: Context? = null) {
         if (newPackage.isBlank()) return
 
         // Ignore our own application or lock activity
@@ -301,7 +304,7 @@ class AppLockManager private constructor(private val context: Context) {
         if (shouldLock(newPackage, className)) {
             // Store the intercepted target intent before launching LockActivity
             storeInterceptedTarget(newPackage, className)
-            launchLockScreen(newPackage, className)
+            launchLockScreen(newPackage, className, launchContext)
         }
     }
 
@@ -396,24 +399,34 @@ class AppLockManager private constructor(private val context: Context) {
 
     /**
      * Launches the LockActivity over the protected application.
+     * When [launchContext] is provided (e.g. from an active AccessibilityService), starting the
+     * activity from that service instance bypasses Android 10+ background activity start restrictions
+     * and aggressive battery saver throttling.
      */
-    fun launchLockScreen(targetPackage: String, targetClass: String? = null) {
+    fun launchLockScreen(targetPackage: String, targetClass: String? = null, launchContext: Context? = null) {
         val now = System.currentTimeMillis()
         if (isLockActivityActive && (now - lastLockLaunchTime < LAUNCH_DEBOUNCE_MS)) {
             return
         }
         lastLockLaunchTime = now
 
-        val intent = Intent(context, LockActivity::class.java).apply {
+        val ctx = launchContext ?: context
+        val intent = Intent(ctx, LockActivity::class.java).apply {
             putExtra(LockActivity.EXTRA_TARGET_PACKAGE, targetPackage)
             if (!targetClass.isNullOrBlank()) {
                 putExtra(LockActivity.EXTRA_TARGET_CLASS, targetClass)
             }
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         try {
-            context.startActivity(intent)
+            ctx.startActivity(intent)
         } catch (_: Exception) {
+            if (ctx !== context) {
+                try {
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
@@ -453,6 +466,7 @@ class AppLockManager private constructor(private val context: Context) {
      */
     fun invalidateLauncherCache() {
         cachedLauncherPackage = null
+        secondaryLauncherCache.clear()
     }
 
     /**
@@ -544,12 +558,23 @@ class AppLockManager private constructor(private val context: Context) {
         if (packageName == launcherPkg) return true
 
         // Fallback check: check if the package explicitly provides a CATEGORY_HOME launcher activity
-        return try {
-            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(packageName)
-            val activities = context.packageManager.queryIntentActivities(homeIntent, 0)
-            activities.isNotEmpty()
-        } catch (_: Exception) {
-            false
+        // Uses thread-safe cache to eliminate expensive synchronous PackageManager Binder IPC on every event
+        return isSecondaryLauncher(packageName)
+    }
+
+    /**
+     * Checks if a package provides a secondary/third-party launcher activity (e.g. Nova, Smart Launcher),
+     * caching the result to avoid repeated synchronous Binder IPC calls on every window state change.
+     */
+    fun isSecondaryLauncher(packageName: String): Boolean {
+        return secondaryLauncherCache.computeIfAbsent(packageName) { pkg ->
+            try {
+                val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(pkg)
+                val activities = context.packageManager.queryIntentActivities(homeIntent, 0)
+                activities.isNotEmpty()
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 

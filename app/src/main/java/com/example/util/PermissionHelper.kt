@@ -117,24 +117,13 @@ object PermissionHelper {
      * Checks if the application is currently whitelisted from battery optimizations.
      */
     fun isIgnoringBatteryOptimizations(context: Context): Boolean {
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return true
-        return powerManager.isIgnoringBatteryOptimizations(context.packageName)
+        return BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
     }
 
     /**
      * Opens Android System Battery Optimization settings page.
      */
     fun openBatteryOptimizationSettings(context: Context) {
-        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            context.startActivity(intent)
-        } catch (_: Exception) {
-            val fallback = Intent(Settings.ACTION_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(fallback)
-        }
+        BatteryOptimizationHelper.openBatteryOptimizationSettings(context)
     }
 }

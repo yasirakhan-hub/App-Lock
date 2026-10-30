@@ -14,6 +14,8 @@ import com.example.data.model.AppInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * Discovers installed launchable apps and converts their metadata and icons
  * for display in Compose UI.
@@ -21,7 +23,44 @@ import kotlinx.coroutines.withContext
 class AppDiscoveryRepository(private val context: Context) {
 
     private val packageManager: PackageManager = context.packageManager
-    private val iconCache = mutableMapOf<String, ImageBitmap?>()
+
+    companion object {
+        // Process-wide thread-safe cache for app icons to eliminate redundant Binder IPC and bitmap decodes
+        // across screens (Dashboard, AppSelection, LockActivity).
+        private val sharedIconCache = ConcurrentHashMap<String, ImageBitmap>()
+
+        fun clearSharedIconCache() {
+            sharedIconCache.clear()
+        }
+    }
+
+    /**
+     * Fast query to count distinct launchable apps without loading labels, icons, or bitmaps.
+     * Prevents loading 50+ Bitmaps into memory on the home Dashboard.
+     */
+    suspend fun getInstalledLaunchableAppsCount(): Int = withContext(Dispatchers.IO) {
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val resolveInfoList = try {
+            packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+        } catch (_: Exception) {
+            try {
+                packageManager.queryIntentActivities(intent, 0)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        val selfPkg = context.packageName
+        val seen = HashSet<String>(resolveInfoList.size)
+        for (info in resolveInfoList) {
+            val pkg = info.activityInfo?.packageName ?: continue
+            if (pkg != selfPkg) {
+                seen.add(pkg)
+            }
+        }
+        seen.size
+    }
 
     /**
      * Loads list of launchable apps.
@@ -73,9 +112,10 @@ class AppDiscoveryRepository(private val context: Context) {
                         pkgName == "com.android.settings" ||
                         pkgName.contains("dialer", ignoreCase = true)
 
-                // Check iconCache first to avoid redundant PackageManager Binder IPC and drawable decoding
-                val iconBitmap = if (iconCache.containsKey(pkgName)) {
-                    iconCache[pkgName]
+                // Check sharedIconCache first to avoid redundant PackageManager Binder IPC and drawable decoding
+                val cached = sharedIconCache[pkgName]
+                val iconBitmap = if (cached != null) {
+                    cached
                 } else {
                     getAppIcon(pkgName, resolveInfo.loadIcon(packageManager))
                 }
@@ -104,12 +144,13 @@ class AppDiscoveryRepository(private val context: Context) {
      * Retrieves or converts app icon to Compose ImageBitmap.
      */
     fun getAppIcon(packageName: String, drawable: Drawable?): ImageBitmap? {
-        if (iconCache.containsKey(packageName)) {
-            return iconCache[packageName]
+        val cached = sharedIconCache[packageName]
+        if (cached != null) {
+            return cached
         }
-        val bitmap = drawableToBitmap(drawable)
-        val imageBitmap = bitmap?.asImageBitmap()
-        iconCache[packageName] = imageBitmap
+        val bitmap = drawableToBitmap(drawable) ?: return null
+        val imageBitmap = bitmap.asImageBitmap()
+        sharedIconCache[packageName] = imageBitmap
         return imageBitmap
     }
 
@@ -129,14 +170,15 @@ class AppDiscoveryRepository(private val context: Context) {
      * Gets app icon for a package directly.
      */
     fun getAppIcon(packageName: String): ImageBitmap? {
-        if (iconCache.containsKey(packageName)) {
-            return iconCache[packageName]
+        val cached = sharedIconCache[packageName]
+        if (cached != null) {
+            return cached
         }
         return try {
             val drawable = packageManager.getApplicationIcon(packageName)
-            val bmp = drawableToBitmap(drawable)
-            val imgBmp = bmp?.asImageBitmap()
-            iconCache[packageName] = imgBmp
+            val bmp = drawableToBitmap(drawable) ?: return null
+            val imgBmp = bmp.asImageBitmap()
+            sharedIconCache[packageName] = imgBmp
             imgBmp
         } catch (e: Exception) {
             null

@@ -42,6 +42,7 @@ class AppLockAccessibilityService : AccessibilityService() {
                 return
             }
 
+            isServiceRunning = true
             if (!::appLockManager.isInitialized) {
                 appLockManager = AppLockManager.getInstance(applicationContext)
             }
@@ -58,7 +59,7 @@ class AppLockAccessibilityService : AccessibilityService() {
             // Allows authenticated access, avoids permanent lockout, and never interferes with essential system settings
             if (isAppInfoForSelf(pkgName, className, event)) {
                 if (!appLockManager.isSelfAppInfoUnlocked()) {
-                    appLockManager.launchLockScreen(packageName, className)
+                    appLockManager.launchLockScreen(packageName, className, this)
                 }
                 return
             }
@@ -73,13 +74,13 @@ class AppLockAccessibilityService : AccessibilityService() {
 
                 if (isUninstallingSelf) {
                     if (!appLockManager.isSelfAppInfoUnlocked()) {
-                        appLockManager.launchLockScreen(pkgName, className)
+                        appLockManager.launchLockScreen(pkgName, className, this)
                     }
                     return
                 }
             }
 
-            appLockManager.onForegroundPackageChanged(pkgName, className)
+            appLockManager.onForegroundPackageChanged(pkgName, className, this)
         }
     }
 
@@ -165,11 +166,25 @@ class AppLockAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        // System paused accessibility events (e.g. Doze mode, low memory, or battery saver throttling).
+        // Safely reset transient in-flight states to keep sessions strictly secure.
+        if (::appLockManager.isInitialized) {
+            appLockManager.onScreenOff()
+        }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         isServiceRunning = false
-        return super.onUnbind(intent)
+        // Return true so Android framework triggers onRebind when service reconnects after temporary unbind
+        return true
+    }
+
+    override fun onRebind(intent: Intent?) {
+        super.onRebind(intent)
+        isServiceRunning = true
+        if (!::appLockManager.isInitialized) {
+            appLockManager = AppLockManager.getInstance(applicationContext)
+        }
     }
 
     override fun onDestroy() {
