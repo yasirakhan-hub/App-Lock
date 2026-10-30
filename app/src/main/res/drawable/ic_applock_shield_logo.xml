@@ -6,66 +6,75 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Outer Shield Glow / Border -->
+    <!-- Raised Neomorphic circular medallion -->
     <path
-        android:pathData="M 54,18 C 68,26 82,26 84,28 C 84,52 76,72 54,88 C 32,72 24,52 24,28 C 26,26 40,26 54,18 Z"
-        android:strokeWidth="2.5"
-        android:strokeColor="#00E5FF"
-        android:fillColor="#0D1F3C" />
-
-    <!-- Inner Shield Accent Path -->
-    <path
-        android:pathData="M 54,23 C 65,30 76,30 78,32 C 78,51 71,67 54,81 C 37,67 30,51 30,32 C 32,30 43,30 54,23 Z">
+        android:pathData="M54,54m-28,0a28,28 0,1 1,56 0a28,28 0,1 1,-56 0">
         <aapt:attr name="android:fillColor">
             <gradient
-                android:startX="54"
-                android:startY="23"
-                android:endX="54"
-                android:endY="81"
+                android:startX="32"
+                android:startY="30"
+                android:endX="76"
+                android:endY="78"
                 android:type="linear">
-                <item android:offset="0.0" android:color="#1A203E6D" />
-                <item android:offset="1.0" android:color="#3D00E5FF" />
+                <item android:offset="0.0" android:color="#232018" />
+                <item android:offset="0.5" android:color="#161512" />
+                <item android:offset="1.0" android:color="#0C0C0F" />
             </gradient>
         </aapt:attr>
     </path>
 
-    <!-- Shield Inner Electric Line -->
+    <!-- Subtle golden medallion rim -->
     <path
-        android:pathData="M 54,23 C 65,30 76,30 78,32 C 78,51 71,67 54,81 C 37,67 30,51 30,32 C 32,30 43,30 54,23 Z"
-        android:strokeWidth="1.5"
-        android:strokeColor="#00B4D8" />
+        android:fillColor="#00000000"
+        android:pathData="M54,54m-27.5,0a27.5,27.5 0,1 1,55 0a27.5,27.5 0,1 1,-55 0"
+        android:strokeWidth="1.2"
+        android:strokeColor="#66F5B800" />
 
-    <!-- Padlock Shackle -->
+    <!-- Iconic Smart AppLock Open/Curved Golden Shackle -->
     <path
-        android:pathData="M 45,47 V 42 C 45,37 49,33 54,33 C 59,33 63,37 63,42 V 47"
-        android:strokeWidth="3.5"
-        android:strokeColor="#00E5FF"
-        android:strokeLineCap="round" />
+        android:fillColor="#00000000"
+        android:pathData="M45.5,48.5 L45.5,41.2 C45.5,36.2 49.3,32.4 54.0,32.4 C58.7,32.4 62.5,36.2 62.5,40.8"
+        android:strokeWidth="4.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="45"
+                android:startY="32"
+                android:endX="63"
+                android:endY="49"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFE259" />
+                <item android:offset="0.55" android:color="#F5B800" />
+                <item android:offset="1.0" android:color="#D97706" />
+            </gradient>
+        </aapt:attr>
+    </path>
 
-    <!-- Padlock Body -->
+    <!-- Rounded Metallic Gold Padlock Body -->
     <path
-        android:pathData="M 42,47 H 66 C 68.2,47 70,48.8 70,51 V 67 C 70,69.2 68.2,71 66,71 H 42 C 39.8,71 38,69.2 38,67 V 51 C 38,48.8 39.8,47 42,47 Z">
+        android:pathData="M44.5,46.8 L63.5,46.8 C66.8,46.8 69.5,49.5 69.5,52.8 L69.5,64.8 C69.5,68.1 66.8,70.8 63.5,70.8 L44.5,70.8 C41.2,70.8 38.5,68.1 38.5,64.8 L38.5,52.8 C38.5,49.5 41.2,46.8 44.5,46.8 Z">
         <aapt:attr name="android:fillColor">
             <gradient
-                android:startX="38"
+                android:startX="39"
                 android:startY="47"
-                android:endX="70"
+                android:endX="69"
                 android:endY="71"
                 android:type="linear">
-                <item android:offset="0.0" android:color="#00E5FF" />
-                <item android:offset="1.0" android:color="#0077B6" />
+                <item android:offset="0.0" android:color="#FFE566" />
+                <item android:offset="0.45" android:color="#F5B800" />
+                <item android:offset="1.0" android:color="#C96A04" />
             </gradient>
         </aapt:attr>
     </path>
 
-    <!-- Padlock Keyhole Circle -->
+    <!-- Deep Charcoal Keyhole Circle -->
     <path
-        android:pathData="M 54,54 m -3,0 a 3,3 0 1,0 6,0 a 3,3 0 1,0 -6,0"
-        android:fillColor="#0A0F1D" />
+        android:fillColor="#0B0B0E"
+        android:pathData="M54,56.2m-3.1,0a3.1,3.1 0,1 1,6.2 0a3.1,3.1 0,1 1,-6.2 0" />
 
-    <!-- Padlock Keyhole Stem -->
+    <!-- Deep Charcoal Keyhole Stem -->
     <path
-        android:pathData="M 52.5,56 L 55.5,56 L 56.5,63 L 51.5,63 Z"
-        android:fillColor="#0A0F1D" />
-
+        android:fillColor="#0B0B0E"
+        android:pathData="M52.3,57.8 L55.7,57.8 L56.4,64.8 C56.5,65.5 55.9,66.0 55.2,66.0 L52.8,66.0 C52.1,66.0 51.5,65.5 51.6,64.8 Z" />
 </vector>

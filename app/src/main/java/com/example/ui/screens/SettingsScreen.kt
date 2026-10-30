@@ -1,11 +1,8 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,28 +12,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Calculate
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockClock
-import androidx.compose.material.icons.filled.LockReset
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -45,14 +38,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -61,13 +53,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -76,8 +65,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.security.AppLockPreferences
 import com.example.ui.common.AuthChallengeDialog
+import com.example.ui.common.MainBottomTab
+import com.example.ui.common.NeoBottomNavigationBar
 import com.example.ui.common.NeoButton
 import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoIconBadge
 import com.example.ui.common.NeoPalette
 import com.example.ui.common.NeoShapes
 import com.example.ui.common.NeoStatusBadge
@@ -85,8 +77,6 @@ import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
 import com.example.util.DeviceAdminHelper
 import com.example.util.PermissionHelper
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,10 +84,11 @@ fun SettingsScreen(
     preferences: AppLockPreferences,
     onNavigateBack: () -> Unit,
     onResetCompleted: () -> Unit,
+    onNavigateToApps: () -> Unit = {},
+    onNavigateToFiles: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     var isAccessibilityGranted by remember { mutableStateOf(PermissionHelper.isAccessibilityServiceEnabled(context)) }
     var isOverlayGranted by remember { mutableStateOf(PermissionHelper.isOverlayPermissionGranted(context)) }
@@ -129,23 +120,42 @@ fun SettingsScreen(
     }
 
     Scaffold(
+        containerColor = NeoPalette.BackgroundBase,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = "Security & Settings",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        text = "Settings",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = NeoPalette.TextPrimary
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack, modifier = Modifier.testTag("settings_back_button")) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = NeoPalette.TextPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = NeoPalette.BackgroundBase
                 )
+            )
+        },
+        bottomBar = {
+            NeoBottomNavigationBar(
+                currentTab = MainBottomTab.SETTINGS,
+                onSelectTab = { tab ->
+                    when (tab) {
+                        MainBottomTab.HOME -> onNavigateBack()
+                        MainBottomTab.APPS -> onNavigateToApps()
+                        MainBottomTab.FILES -> onNavigateToFiles()
+                        MainBottomTab.SETTINGS -> {}
+                    }
+                }
             )
         },
         modifier = modifier.fillMaxSize()
@@ -155,34 +165,22 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Section 1: Authentication Settings
-            SettingsSectionHeader(title = "Authentication Credentials")
-
+            // 1. Change PIN (matching Panel 9)
             SettingsRow(
-                title = "Change Master PIN",
-                subtitle = "Update your current ${preferences.getPinLength()}-digit security PIN",
-                icon = Icons.Default.Key,
+                title = "Change PIN",
+                subtitle = "Update your security PIN",
+                icon = Icons.Default.Person,
                 onClick = { showAuthForChangePin = true },
                 testTag = "settings_change_pin_row"
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            SettingsRow(
-                title = "Recovery Security Question",
-                subtitle = preferences.getSecurityQuestion() ?: "Not configured",
-                icon = Icons.Default.HelpOutline,
-                onClick = { showAuthForChangeQuestion = true },
-                testTag = "settings_change_question_row"
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-
+            // 2. Biometric Authentication (matching Panel 9)
             NeoCard(
+                shape = NeoShapes.MediumCard,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("settings_biometric_card")
@@ -192,38 +190,29 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (isDarkTheme) NeoPalette.SurfaceLight else MaterialTheme.colorScheme.surfaceVariant,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Fingerprint,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        NeoIconBadge(
+                            icon = Icons.Default.Fingerprint,
+                            size = 44.dp,
+                            iconSize = 22.dp,
+                            isGlowing = true
+                        )
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
                             Text(
-                                text = "Fingerprint Unlock",
+                                text = "Biometric Authentication",
                                 style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                fontWeight = FontWeight.Bold,
+                                color = NeoPalette.TextPrimary
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Use fingerprint authentication as an alternative to PIN",
+                                text = "Fingerprint / Face Unlock",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = NeoPalette.TextSecondary
                             )
                         }
                     }
@@ -233,21 +222,81 @@ fun SettingsScreen(
                             isBiometricEnabled = checked
                             preferences.setBiometricEnabled(checked)
                         },
-                        colors = androidx.compose.material3.SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.primary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = NeoPalette.TextInverse,
+                            checkedTrackColor = NeoPalette.PrimaryGold,
+                            uncheckedThumbColor = NeoPalette.TextSecondary,
+                            uncheckedTrackColor = NeoPalette.SurfaceSunken
                         ),
                         modifier = Modifier.testTag("settings_biometric_switch")
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            // 3. Recovery Question (matching Panel 9)
+            SettingsRow(
+                title = "Recovery Question",
+                subtitle = preferences.getSecurityQuestion() ?: "Set your recovery details",
+                icon = Icons.Default.Key,
+                onClick = { showAuthForChangeQuestion = true },
+                testTag = "settings_change_question_row"
+            )
 
-            // Section 1B: Calculator Disguise & Vault Gateway
-            SettingsSectionHeader(title = "Calculator Disguise & Vault Gateway")
+            // 4. App Lock Settings (matching Panel 9)
+            SettingsRow(
+                title = "App Lock Settings",
+                subtitle = if (relockOnScreenOff) "Customize lock behavior (Screen Off)" else "Customize lock behavior (Immediate)",
+                icon = Icons.Default.Lock,
+                onClick = {
+                    pendingRelockPolicy = !relockOnScreenOff
+                },
+                testTag = "settings_app_lock_behavior_row"
+            )
+
+            // 5. Hide Files Settings (matching Panel 9)
+            SettingsRow(
+                title = "Hide Files Settings",
+                subtitle = "Import & vault options",
+                icon = Icons.Default.Folder,
+                onClick = onNavigateToFiles,
+                testTag = "settings_hide_files_row"
+            )
+
+            // 6. Calculator Settings (matching Panel 9)
+            SettingsRow(
+                title = "Calculator Settings",
+                subtitle = if (isCalcSecretConfigured) {
+                    "Disguise options (${preferences.getCalculatorSecretLength()} digits + '=')"
+                } else {
+                    "Disguise options"
+                },
+                icon = Icons.Default.Calculate,
+                trailingStatus = if (isCalcSecretConfigured) "Configured" else null,
+                trailingColor = NeoPalette.PrimaryGold,
+                onClick = {
+                    enableDisguiseAfterSecretSetup = false
+                    showAuthForCalcSecret = true
+                },
+                testTag = "settings_calc_secret_row"
+            )
+
+            // 7. Security Architecture & Limitations row
+            SettingsRow(
+                title = "Security Architecture",
+                subtitle = "App version 1.0.0 • AES-256-GCM & Accessibility details",
+                icon = Icons.Default.Info,
+                onClick = { showSecurityLimitationsDialog = true },
+                testTag = "settings_limitations_row"
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Calculator Disguise Mode Toggle Card (preserving settings_calc_disguise_card & switch)
+            SettingsSectionHeader(title = "Calculator Disguise Gateway")
 
             NeoCard(
+                shape = NeoShapes.MediumCard,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("settings_calc_disguise_card")
@@ -257,100 +306,56 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (isDarkTheme) NeoPalette.SurfaceLight else MaterialTheme.colorScheme.surfaceVariant,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Calculate,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        NeoIconBadge(
+                            icon = Icons.Default.Calculate,
+                            size = 42.dp,
+                            iconSize = 20.dp,
+                            isGlowing = isCalcDisguiseEnabled
+                        )
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Calculator Disguise",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                NeoStatusBadge(
-                                    text = if (isCalcDisguiseEnabled) "Configured & Active" else "Disabled",
-                                    color = if (isCalcDisguiseEnabled) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Open a real calculator when launching Smart AppLock. Enter your secret code + '=' then verify master PIN/fingerprint to open Vault.",
+                                text = "Launch in Calculator Disguise",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = NeoPalette.TextPrimary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Open tactile calculator on launch; enter secret + '=' to access Vault",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = NeoPalette.TextSecondary
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
                     Switch(
                         checked = isCalcDisguiseEnabled,
                         onCheckedChange = { checked ->
                             pendingCalcDisguiseToggle = checked
                         },
-                        colors = androidx.compose.material3.SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.primary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = NeoPalette.TextInverse,
+                            checkedTrackColor = NeoPalette.PrimaryGold,
+                            uncheckedThumbColor = NeoPalette.TextSecondary,
+                            uncheckedTrackColor = NeoPalette.SurfaceSunken
                         ),
                         modifier = Modifier.testTag("settings_calc_disguise_switch")
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            SettingsRow(
-                title = if (isCalcSecretConfigured) "Change Secret Sequence" else "Set Secret Sequence",
-                subtitle = if (isCalcSecretConfigured) {
-                    "Configured (${preferences.getCalculatorSecretLength()} digits + '='). Stored as salted hash."
-                } else {
-                    "Configure a 4–8 digit sequence followed by '=' to trigger the Vault gateway"
-                },
-                icon = Icons.Default.Key,
-                trailingStatus = if (isCalcSecretConfigured) "Configured" else "Not Set",
-                trailingColor = if (isCalcSecretConfigured) Color(0xFF10B981) else Color(0xFFF59E0B),
-                onClick = {
-                    enableDisguiseAfterSecretSetup = false
-                    showAuthForCalcSecret = true
-                },
-                testTag = "settings_calc_secret_row"
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Section 2: Relock Behavior
+            // Relock Policy Radio Card
             SettingsSectionHeader(title = "Relock Policy")
 
             NeoCard(
+                shape = NeoShapes.MediumCard,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "When should an unlocked application be locked again?",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -363,16 +368,26 @@ fun SettingsScreen(
                                 if (relockOnScreenOff) {
                                     pendingRelockPolicy = false
                                 }
-                            }
+                            },
+                            colors = RadioButtonDefaults.colors(selectedColor = NeoPalette.PrimaryGold)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
-                            Text("Immediately on app exit (High Security)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            Text("Prompts for PIN each time the app is reopened", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                "Immediately on app exit (High Security)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = NeoPalette.TextPrimary
+                            )
+                            Text(
+                                "Prompts for PIN each time the app is reopened",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NeoPalette.TextSecondary
+                            )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Row(
                         modifier = Modifier
@@ -386,20 +401,28 @@ fun SettingsScreen(
                                 if (!relockOnScreenOff) {
                                     pendingRelockPolicy = true
                                 }
-                            }
+                            },
+                            colors = RadioButtonDefaults.colors(selectedColor = NeoPalette.PrimaryGold)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
-                            Text("When screen turns off (Convenience)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            Text("Keeps apps unlocked until you lock your phone", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                "When screen turns off (Convenience)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = NeoPalette.TextPrimary
+                            )
+                            Text(
+                                "Keeps apps unlocked until you lock your phone",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NeoPalette.TextSecondary
+                            )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Section 3: Android Permissions & Service Health
+            // System Permissions
             SettingsSectionHeader(title = "System Permissions")
 
             SettingsRow(
@@ -407,35 +430,31 @@ fun SettingsScreen(
                 subtitle = if (isAccessibilityGranted) "Active and monitoring window transitions" else "Disabled — Tap to open Accessibility Settings",
                 icon = Icons.Default.Security,
                 trailingStatus = if (isAccessibilityGranted) "Active" else "Disabled",
-                trailingColor = if (isAccessibilityGranted) Color(0xFF10B981) else Color(0xFFF59E0B),
+                trailingColor = if (isAccessibilityGranted) NeoPalette.SuccessGreen else NeoPalette.PrimaryGold,
                 onClick = {
                     PermissionHelper.openAccessibilitySettings(context)
                 },
                 testTag = "settings_accessibility_row"
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
             SettingsRow(
                 title = "Display Over Other Apps",
                 subtitle = if (isOverlayGranted) "Granted — enables instant lock overlay" else "Denied — Tap to open Overlay Settings",
                 icon = Icons.Default.LockClock,
                 trailingStatus = if (isOverlayGranted) "Granted" else "Action Needed",
-                trailingColor = if (isOverlayGranted) Color(0xFF10B981) else Color(0xFFF59E0B),
+                trailingColor = if (isOverlayGranted) NeoPalette.SuccessGreen else NeoPalette.PrimaryGold,
                 onClick = {
                     PermissionHelper.openOverlaySettings(context)
                 },
                 testTag = "settings_overlay_row"
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
             SettingsRow(
-                title = "Device Administrator (Anti-Force Stop & Uninstall)",
-                subtitle = if (isDeviceAdminActive) "Active — Protects against unauthorized uninstallation and tampering" else "Inactive — Tap to activate Device Admin protection",
+                title = "Device Administrator",
+                subtitle = if (isDeviceAdminActive) "Active — Protects against unauthorized uninstallation" else "Inactive — Tap to activate Device Admin protection",
                 icon = Icons.Default.Security,
                 trailingStatus = if (isDeviceAdminActive) "Protected" else "Action Needed",
-                trailingColor = if (isDeviceAdminActive) Color(0xFF10B981) else Color(0xFFF59E0B),
+                trailingColor = if (isDeviceAdminActive) NeoPalette.SuccessGreen else NeoPalette.PrimaryGold,
                 onClick = {
                     if (isDeviceAdminActive) {
                         showAuthForDeactivateAdmin = true
@@ -449,59 +468,98 @@ fun SettingsScreen(
                 testTag = "settings_device_admin_row"
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Section 4: Security Architecture & Limitations
-            SettingsSectionHeader(title = "Security Architecture & Transparency")
+            // DANGER ZONE Section
+            SettingsSectionHeader(title = "DANGER ZONE")
 
-            SettingsRow(
-                title = "How AppLock Works & Android Limitations",
-                subtitle = "Read why AccessibilityService is used, privacy details, and OS limits",
-                icon = Icons.Default.Info,
-                onClick = { showSecurityLimitationsDialog = true },
-                testTag = "settings_limitations_row"
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Section 5: Reset / Clear
-            SettingsSectionHeader(title = "Danger Zone")
-
-            NeoButton(
-                text = "Reset All AppLock Data & PIN",
-                onClick = { showResetConfirmDialog = true },
-                icon = Icons.Default.DeleteForever,
-                isDestructive = true,
+            NeoCard(
+                shape = NeoShapes.MediumCard,
+                accentBorder = NeoPalette.ErrorRed.copy(alpha = 0.45f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("settings_reset_data_button")
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            // Section 6: About
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .testTag("settings_danger_zone_card")
             ) {
                 Text(
-                    text = "ABOUT",
-                    style = MaterialTheme.typography.titleMedium,
+                    text = "Factory Reset AppLock",
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFFBBF24),
-                    letterSpacing = 2.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    color = NeoPalette.ErrorRed
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Developed by Yasir A Khan",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    text = "Permanently clears your master PIN, recovery answer, and protected app list.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NeoPalette.TextSecondary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                NeoButton(
+                    text = "Reset All AppLock Data & PIN",
+                    onClick = { showResetConfirmDialog = true },
+                    icon = Icons.Default.DeleteForever,
+                    isDestructive = true,
+                    shape = NeoShapes.FullPill,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_reset_data_button")
                 )
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Centered Heading ABOUT immediately below DANGER ZONE
+            Text(
+                text = "ABOUT",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.4.sp,
+                color = NeoPalette.PrimaryGold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp, bottom = 2.dp)
+                    .testTag("settings_about_heading")
+            )
+
+            NeoCard(
+                onClick = { showSecurityLimitationsDialog = true },
+                shape = NeoShapes.MediumCard,
+                accentBorder = NeoPalette.PrimaryGold.copy(alpha = 0.35f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_about_card")
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Smart AppLock • Version 1.0.0",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = NeoPalette.TextPrimary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Hardware-backed AES-256-GCM Vault & Real-Time App Protection",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NeoPalette.TextSecondary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Developed by Yasir A Khan",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = NeoPalette.PrimaryCyan,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.testTag("settings_developer_credit")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         // Change PIN Dialog
@@ -531,14 +589,20 @@ fun SettingsScreen(
         if (showResetConfirmDialog) {
             AlertDialog(
                 onDismissRequest = { showResetConfirmDialog = false },
-                icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                title = { Text("Reset AppLock?", fontWeight = FontWeight.Bold) },
-                text = { Text("This will permanently clear your master PIN, security question, and all protected package selections. You will return to first-time setup.") },
+                containerColor = NeoPalette.SurfaceDark,
+                icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = NeoPalette.ErrorRed) },
+                title = { Text("Reset AppLock?", fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary) },
+                text = {
+                    Text(
+                        "This will permanently clear your master PIN, security question, and all protected package selections. You will return to first-time setup.",
+                        color = NeoPalette.TextSecondary
+                    )
+                },
                 confirmButton = {
                     NeoButton(
                         text = "Reset Everything",
                         isDestructive = true,
-                        shape = NeoShapes.SmallControl,
+                        shape = NeoShapes.FullPill,
                         onClick = {
                             showResetConfirmDialog = false
                             showAuthForReset = true
@@ -548,7 +612,7 @@ fun SettingsScreen(
                 dismissButton = {
                     NeoButton(
                         text = "Cancel",
-                        shape = NeoShapes.SmallControl,
+                        shape = NeoShapes.FullPill,
                         onClick = { showResetConfirmDialog = false }
                     )
                 }
@@ -694,8 +758,8 @@ private fun SettingsSectionHeader(title: String) {
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.2.sp,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(bottom = 8.dp, top = 4.dp)
+        color = NeoPalette.PrimaryGold,
+        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
     )
 }
 
@@ -705,13 +769,14 @@ private fun SettingsRow(
     subtitle: String,
     icon: ImageVector,
     trailingStatus: String? = null,
-    trailingColor: Color = MaterialTheme.colorScheme.primary,
+    trailingColor: Color = NeoPalette.PrimaryGold,
     onClick: () -> Unit,
     testTag: String
 ) {
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     NeoCard(
         onClick = onClick,
+        shape = NeoShapes.MediumCard,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         modifier = Modifier
             .fillMaxWidth()
             .testTag(testTag)
@@ -720,26 +785,28 @@ private fun SettingsRow(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                shape = CircleShape,
-                color = if (isDarkTheme) NeoPalette.SurfaceLight else MaterialTheme.colorScheme.surfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant
-                ),
-                modifier = Modifier.size(40.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(imageVector = icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                }
-            }
+            NeoIconBadge(
+                icon = icon,
+                size = 44.dp,
+                iconSize = 22.dp,
+                isGlowing = true
+            )
 
             Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary
+                )
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(text = subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NeoPalette.TextSecondary
+                )
             }
 
             if (trailingStatus != null) {
@@ -750,10 +817,10 @@ private fun SettingsRow(
                 )
             } else {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(18.dp)
+                    tint = NeoPalette.TextSecondary,
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }
@@ -766,16 +833,16 @@ private fun ChangePinDialog(
     onDismiss: () -> Unit,
     onSuccess: () -> Unit
 ) {
-    var step by remember { mutableIntStateOf(2) } // 2: enter new, 3: confirm new
+    var step by remember { mutableIntStateOf(2) }
     val pinLength = preferences.getPinLength()
     var currentInput by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NeoPalette.SurfaceDark,
         title = {
             Text(
                 text = when (step) {
@@ -784,7 +851,8 @@ private fun ChangePinDialog(
                     else -> "Confirm New PIN"
                 },
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = NeoPalette.TextPrimary
             )
         },
         text = {
@@ -806,12 +874,13 @@ private fun ChangePinDialog(
 
                 if (errorMsg != null) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(errorMsg ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    Text(errorMsg ?: "", style = MaterialTheme.typography.bodySmall, color = NeoPalette.ErrorRed)
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 PinKeypad(
+                    buttonSize = 62.dp,
                     onDigitClick = { digit ->
                         when (step) {
                             1 -> {
@@ -872,7 +941,7 @@ private fun ChangePinDialog(
         dismissButton = {
             NeoButton(
                 text = "Cancel",
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = onDismiss
             )
         }
@@ -900,13 +969,14 @@ private fun ChangeQuestionDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Security Recovery Question") },
+        containerColor = NeoPalette.SurfaceDark,
+        title = { Text("Security Recovery Question", color = NeoPalette.TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column {
                 Text(
                     "Used to recover access without exposing existing PIN.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = NeoPalette.TextSecondary
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -944,7 +1014,7 @@ private fun ChangeQuestionDialog(
                     singleLine = true,
                     isError = errorMsg != null,
                     supportingText = {
-                        if (errorMsg != null) Text(errorMsg ?: "", color = MaterialTheme.colorScheme.error)
+                        if (errorMsg != null) Text(errorMsg ?: "", color = NeoPalette.ErrorRed)
                         else Text("Case-insensitive, stored as cryptographic hash.")
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -955,7 +1025,7 @@ private fun ChangeQuestionDialog(
             NeoButton(
                 text = "Save",
                 isPrimaryGlowing = true,
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = {
                     if (answerText.trim().length < 2) {
                         errorMsg = "Answer must be at least 2 characters"
@@ -969,7 +1039,7 @@ private fun ChangeQuestionDialog(
         dismissButton = {
             NeoButton(
                 text = "Cancel",
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = onDismiss
             )
         }
@@ -980,41 +1050,26 @@ private fun ChangeQuestionDialog(
 private fun SecurityLimitationsDialog(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-        title = { Text("Technical Architecture & Limits") },
+        containerColor = NeoPalette.SurfaceDark,
+        icon = { Icon(Icons.Default.Info, contentDescription = null, tint = NeoPalette.PrimaryGold) },
+        title = { Text("Smart AppLock Architecture", color = NeoPalette.TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text("How AppLock Works:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Developed by Yasir A Khan • Version 1.0.0",
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.PrimaryGold,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("How AppLock Works:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = NeoPalette.TextPrimary)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     "• Uses Android AccessibilityService (TYPE_WINDOW_STATE_CHANGED) to detect which app window transitions to the foreground.\n" +
                     "• Configured with canRetrieveWindowContent=\"false\" to strictly guarantee zero access to on-screen text or private data.\n" +
-                    "• When a protected package opens, displays the full-screen LockActivity before normal use.",
+                    "• Files inside Hide Files are encrypted with AES-256-GCM backed by Android Keystore.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text("Why Not Usage Access Alone?", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "Usage Access polls usage statistics asynchronously. In modern Android, background polling has severe battery limits and 1 to 5-second delays, allowing users to view protected app content before the lock triggers. AccessibilityService provides event-driven, immediate detection.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text("Honest Android System Boundaries:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "Standard Android does not allow third-party apps to prevent:\n" +
-                    "1. Device Safe Mode: Boots without third-party services.\n" +
-                    "2. Force Stop: If an intruder has your device lock and access to Android Settings, they can Force Stop apps unless device owner (MDM) profile is installed.\n" +
-                    "3. Aggressive OEM Battery Killers: Xiaomi, Samsung, and Huawei require setting AppLock to 'No battery restrictions' and 'Autostart' to avoid the OS killing background services.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = NeoPalette.TextSecondary
                 )
             }
         },
@@ -1022,7 +1077,7 @@ private fun SecurityLimitationsDialog(onDismiss: () -> Unit) {
             NeoButton(
                 text = "Understood",
                 isPrimaryGlowing = true,
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = onDismiss
             )
         }
@@ -1040,18 +1095,20 @@ private fun ConfigureSecretSequenceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NeoPalette.SurfaceDark,
         icon = {
             Icon(
                 imageVector = Icons.Default.Calculate,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
+                tint = NeoPalette.PrimaryGold
             )
         },
         title = {
             Text(
                 text = "Calculator Secret Sequence",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = NeoPalette.TextPrimary
             )
         },
         text = {
@@ -1059,7 +1116,7 @@ private fun ConfigureSecretSequenceDialog(
                 Text(
                     text = "Enter a 4 to 8 digit secret sequence. In the calculator, typing these digits followed by '=' will trigger your Master PIN / Fingerprint prompt to unlock the Vault.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = NeoPalette.TextSecondary
                 )
                 Spacer(modifier = Modifier.height(14.dp))
 
@@ -1071,7 +1128,7 @@ private fun ConfigureSecretSequenceDialog(
                         errorMsg = null
                     },
                     label = { Text("Secret Digits (4–8 digits)") },
-                    suffix = { Text("=", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                    suffix = { Text("=", fontWeight = FontWeight.Bold, color = NeoPalette.PrimaryGold) },
                     singleLine = true,
                     isError = errorMsg != null,
                     modifier = Modifier
@@ -1089,12 +1146,12 @@ private fun ConfigureSecretSequenceDialog(
                         errorMsg = null
                     },
                     label = { Text("Confirm Secret Digits") },
-                    suffix = { Text("=", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) },
+                    suffix = { Text("=", fontWeight = FontWeight.Bold, color = NeoPalette.PrimaryGold) },
                     singleLine = true,
                     isError = errorMsg != null,
                     supportingText = {
                         if (errorMsg != null) {
-                            Text(errorMsg ?: "", color = MaterialTheme.colorScheme.error)
+                            Text(errorMsg ?: "", color = NeoPalette.ErrorRed)
                         } else {
                             Text("Trigger preview: ${if (firstSequence.isNotEmpty()) "${firstSequence}=" else "e.g. 1984="}")
                         }
@@ -1109,7 +1166,7 @@ private fun ConfigureSecretSequenceDialog(
             NeoButton(
                 text = "Save Sequence",
                 isPrimaryGlowing = true,
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = {
                     if (firstSequence.length < 4) {
                         errorMsg = "Secret sequence must be at least 4 digits"
@@ -1127,10 +1184,9 @@ private fun ConfigureSecretSequenceDialog(
         dismissButton = {
             NeoButton(
                 text = "Cancel",
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = onDismiss
             )
         }
     )
 }
-

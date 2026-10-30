@@ -1,21 +1,28 @@
 package com.example.ui.theme
 
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
     primary = DarkPrimary,
     onPrimary = DarkOnPrimary,
     primaryContainer = DarkPrimaryContainer,
+    onPrimaryContainer = Color(0xFFFFE066),
     secondary = DarkSecondary,
+    onSecondary = DarkOnPrimary,
+    secondaryContainer = Color(0xFF2D2106),
+    onSecondaryContainer = Color(0xFFFDE68A),
     tertiary = DarkTertiary,
+    onTertiary = DarkOnPrimary,
+    tertiaryContainer = Color(0xFF2E2308),
+    onTertiaryContainer = Color(0xFFFDE68A),
     background = DarkBg,
     surface = DarkSurface,
     surfaceVariant = DarkSurfaceVariant,
@@ -44,10 +51,12 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun AppLockTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false, // Security apps benefit from consistent slate & cyan branding
+    darkTheme: Boolean = true,
+    dynamicColor: Boolean = false, // Preserve signature Black & Gold / Warm White & Gold Neomorphism theme
     content: @Composable () -> Unit
 ) {
+    com.example.ui.common.NeoPalette.isDarkMode = darkTheme
+
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
@@ -66,7 +75,7 @@ fun AppLockTheme(
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {

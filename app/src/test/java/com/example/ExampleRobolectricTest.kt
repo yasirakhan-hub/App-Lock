@@ -216,4 +216,168 @@ class ExampleRobolectricTest {
         assertTrue("Warning message must be non-empty", warning.isNotEmpty())
         assertTrue("Warning message must mention uninstall or PIN", warning.contains("uninstall") || warning.contains("PIN"))
     }
+
+    @Test
+    fun testMandatoryVaultAuthenticationGateAndSessionRelock() {
+        val navVm = MainNavigationViewModel(androidx.lifecycle.SavedStateHandle())
+
+        // Initially not authorized for Vault; cold start targeting VAULT redirects to VAULT_AUTH_GATE
+        assertFalse(navVm.isVaultAuthorized())
+        assertEquals(ScreenState.VAULT_AUTH_GATE, navVm.getOrInitScreen { ScreenState.VAULT })
+
+        // Requesting vault access from any entry point routes to VAULT_AUTH_GATE
+        val requested = navVm.requestVaultAccess(ScreenState.DASHBOARD)
+        assertEquals(ScreenState.VAULT_AUTH_GATE, requested)
+        assertEquals(ScreenState.VAULT_AUTH_GATE, navVm.getOrInitScreen { ScreenState.DASHBOARD })
+        assertFalse(navVm.isVaultAuthorized())
+
+        // Authorizing vault entry unlocks VAULT
+        val authorizedScreen = navVm.authorizeVaultEntry()
+        assertTrue(navVm.isVaultAuthorized())
+        assertEquals(ScreenState.VAULT, authorizedScreen)
+        assertEquals(ScreenState.VAULT, navVm.getOrInitScreen { ScreenState.DASHBOARD })
+
+        // Backgrounding lockVaultSession() immediately locks the vault and reverts VAULT to VAULT_AUTH_GATE
+        navVm.lockVaultSession()
+        assertFalse(navVm.isVaultAuthorized())
+        assertEquals(ScreenState.VAULT_AUTH_GATE, navVm.getOrInitScreen { ScreenState.DASHBOARD })
+
+        // Re-authorize and then leave Files via bottom nav / Back button -> immediately locks vault
+        navVm.authorizeVaultEntry()
+        assertTrue(navVm.isVaultAuthorized())
+        navVm.setScreen(ScreenState.SETTINGS)
+        assertFalse("Leaving Files screen must lock the vault immediately", navVm.isVaultAuthorized())
+        assertEquals(ScreenState.SETTINGS, navVm.getOrInitScreen { ScreenState.DASHBOARD })
+
+        // Re-entering Files requires VAULT_AUTH_GATE again
+        val reRequested = navVm.requestVaultAccess(ScreenState.SETTINGS)
+        assertEquals(ScreenState.VAULT_AUTH_GATE, reRequested)
+        assertEquals(ScreenState.VAULT_AUTH_GATE, navVm.getOrInitScreen { ScreenState.DASHBOARD })
+        assertFalse(navVm.isVaultAuthorized())
+    }
+
+    @Test
+    fun testBatchAddAndRemoveProtectedPackages() {
+        val batch = listOf("com.whatsapp", "com.instagram.android", "com.google.android.youtube")
+        preferences.addProtectedPackages(batch)
+
+        val protectedSet = preferences.getProtectedPackages()
+        assertEquals(3, protectedSet.size)
+        assertTrue(preferences.isPackageProtected("com.whatsapp"))
+        assertTrue(preferences.isPackageProtected("com.instagram.android"))
+        assertTrue(preferences.isPackageProtected("com.google.android.youtube"))
+
+        // Adding another batch preserves existing protected packages
+        preferences.addProtectedPackages(listOf("com.google.android.gm", "com.whatsapp"))
+        assertEquals(4, preferences.getProtectedPackages().size)
+        assertTrue(preferences.isPackageProtected("com.google.android.gm"))
+
+        // Removing a subset updates immediately
+        preferences.removeProtectedPackages(listOf("com.instagram.android", "com.google.android.youtube"))
+        assertEquals(2, preferences.getProtectedPackages().size)
+        assertFalse(preferences.isPackageProtected("com.instagram.android"))
+        assertTrue(preferences.isPackageProtected("com.whatsapp"))
+    }
+
+    @Test
+    fun testAppManagementSessionAuthenticationLifecycle() {
+        val navVm = MainNavigationViewModel(androidx.lifecycle.SavedStateHandle())
+
+        // Initially not authenticated for App Management
+        assertFalse(navVm.isAppManagementAuthorized())
+
+        // Entering APP_SELECTION and authenticating once keeps session active
+        navVm.setScreen(ScreenState.APP_SELECTION)
+        assertFalse(navVm.isAppManagementAuthorized())
+
+        navVm.authorizeAppManagementSession()
+        assertTrue("Management session must remain active after single auth", navVm.isAppManagementAuthorized())
+
+        // Staying in APP_SELECTION preserves management session
+        navVm.setScreen(ScreenState.APP_SELECTION)
+        assertTrue(navVm.isAppManagementAuthorized())
+
+        // Exiting APP_SELECTION to DASHBOARD immediately revokes session so re-entry requires auth again
+        navVm.setScreen(ScreenState.DASHBOARD)
+        assertFalse("Exiting App Selection must revoke management session", navVm.isAppManagementAuthorized())
+
+        // Re-entering APP_SELECTION requires authentication again
+        navVm.setScreen(ScreenState.APP_SELECTION)
+        assertFalse(navVm.isAppManagementAuthorized())
+
+        // Backgrounding via lockAppManagementSession() also revokes session
+        navVm.authorizeAppManagementSession()
+        assertTrue(navVm.isAppManagementAuthorized())
+        navVm.lockAppManagementSession()
+        assertFalse(navVm.isAppManagementAuthorized())
+    }
+
+    @Test
+    fun testLauncherIconResourcesResolve() {
+        val launcherDrawable = androidx.core.content.ContextCompat.getDrawable(context, R.mipmap.ic_launcher)
+        val roundLauncherDrawable = androidx.core.content.ContextCompat.getDrawable(context, R.mipmap.ic_launcher_round)
+        val fgDrawable = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_launcher_foreground)
+        val fgLogoDrawable = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_launcher_foreground_logo)
+        val inAppLogoDrawable = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.smart_applock_logo)
+        val bgDrawable = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_launcher_background)
+
+        org.junit.Assert.assertNotNull("ic_launcher mipmap must resolve", launcherDrawable)
+        org.junit.Assert.assertNotNull("ic_launcher_round mipmap must resolve", roundLauncherDrawable)
+        org.junit.Assert.assertNotNull("ic_launcher_foreground drawable must resolve", fgDrawable)
+        org.junit.Assert.assertNotNull("ic_launcher_foreground_logo drawable must resolve", fgLogoDrawable)
+        org.junit.Assert.assertNotNull("smart_applock_logo drawable must resolve", inAppLogoDrawable)
+        org.junit.Assert.assertNotNull("ic_launcher_background drawable must resolve", bgDrawable)
+    }
+
+    @Test
+    fun testFilesToHomeAndTabsDirectNavigationAfterVaultAuth() {
+        val navVm = MainNavigationViewModel(androidx.lifecycle.SavedStateHandle())
+
+        // 1. User enters Files -> must go through VAULT_AUTH_GATE
+        assertEquals(ScreenState.VAULT_AUTH_GATE, navVm.requestVaultAccess(ScreenState.DASHBOARD))
+        assertEquals(ScreenState.VAULT, navVm.authorizeVaultEntry())
+        assertTrue(navVm.isVaultAuthorized())
+
+        // 2. From Files (VAULT), user taps Home -> locks vault and goes directly to DASHBOARD (NOT VAULT_AUTH_GATE)
+        navVm.lockVaultSession()
+        navVm.setScreen(ScreenState.DASHBOARD)
+        assertFalse("Vault must be locked immediately upon leaving Files", navVm.isVaultAuthorized())
+        assertEquals(
+            "Navigating from Files to Home must land directly on DASHBOARD without re-prompting VAULT_AUTH_GATE",
+            ScreenState.DASHBOARD,
+            navVm.getOrInitScreen { ScreenState.AUTH_GATE }
+        )
+
+        // 3. Re-enter Files, authenticate, then tap Apps -> goes directly to APP_SELECTION
+        navVm.requestVaultAccess(ScreenState.DASHBOARD)
+        navVm.authorizeVaultEntry()
+        assertTrue(navVm.isVaultAuthorized())
+        navVm.lockVaultSession()
+        navVm.setScreen(ScreenState.APP_SELECTION)
+        assertFalse(navVm.isVaultAuthorized())
+        assertEquals(ScreenState.APP_SELECTION, navVm.getOrInitScreen { ScreenState.AUTH_GATE })
+    }
+
+    @Test
+    fun testThreeOptionHomeThemeSwitcherPersistence() {
+        // Default is System Default (null)
+        org.junit.Assert.assertNull(preferences.isDarkThemeOverride())
+
+        // Option 1: Dark
+        preferences.setDarkThemeOverride(true)
+        assertEquals(true, preferences.isDarkThemeOverride())
+
+        // Option 2: Light
+        preferences.setDarkThemeOverride(false)
+        assertEquals(false, preferences.isDarkThemeOverride())
+
+        // Option 3: System Default (Auto)
+        preferences.setDarkThemeOverride(null)
+        org.junit.Assert.assertNull(preferences.isDarkThemeOverride())
+    }
 }
+
+
+
+
+

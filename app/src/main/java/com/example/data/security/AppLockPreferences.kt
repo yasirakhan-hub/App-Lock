@@ -182,6 +182,27 @@ class AppLockPreferences(context: Context) {
     }
 
     /**
+     * Atomically locks multiple packages in a single operation and persists them immediately.
+     */
+    fun addProtectedPackages(packageNames: Collection<String>) {
+        if (packageNames.isEmpty()) return
+        val current = HashSet(getProtectedPackages())
+        current.addAll(packageNames)
+        setProtectedPackages(current)
+    }
+
+    /**
+     * Atomically unlocks multiple packages in a single operation and persists them immediately.
+     */
+    fun removeProtectedPackages(packageNames: Collection<String>) {
+        if (packageNames.isEmpty()) return
+        val current = HashSet(getProtectedPackages())
+        current.removeAll(packageNames.toSet())
+        setProtectedPackages(current)
+    }
+
+
+    /**
      * Master toggle for app protection.
      */
     fun isProtectionEnabled(): Boolean {

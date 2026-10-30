@@ -8,27 +8,22 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -39,22 +34,27 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.repository.AppLockManager
+import com.example.ui.calculator.CalculatorVaultScreen
+import com.example.ui.common.MainBottomTab
+import com.example.ui.common.NeoBottomNavigationBar
 import com.example.ui.common.NeoCircularButton
+import com.example.ui.common.NeoGoldPadlockEmblem
 import com.example.ui.common.NeoPalette
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
@@ -64,6 +64,7 @@ import com.example.ui.screens.OnboardingSetupScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TestLockScreen
 import com.example.ui.theme.AppLockTheme
+import com.example.ui.vault.VaultScreen
 import com.example.util.BiometricHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -76,27 +77,127 @@ enum class ScreenState {
     APP_SELECTION,
     SETTINGS,
     TEST_LOCK,
+    VAULT_AUTH_GATE,
     VAULT
 }
 
+/**
+ * ViewModel preserving navigation state across configuration changes and system file picker launches,
+ * while strictly enforcing mandatory Vault authentication on every entry to Files (VAULT).
+ */
 class MainNavigationViewModel(private val savedStateHandle: SavedStateHandle) : ViewModel() {
     companion object {
         private const val KEY_CURRENT_SCREEN = "nav_current_screen"
         private const val KEY_OPENED_CALC_FROM_DASHBOARD = "nav_opened_calc_from_dashboard"
+        private const val KEY_VAULT_RETURN_SCREEN = "nav_vault_return_screen"
+        private const val KEY_VAULT_AUTHORIZED = "nav_vault_authorized"
+        private const val KEY_APP_MGMT_AUTHORIZED = "nav_app_mgmt_authorized"
     }
+
+    private var isSystemPickerInFlight: Boolean = false
 
     fun getOrInitScreen(initialProvider: () -> ScreenState): ScreenState {
         val savedName = savedStateHandle.get<String>(KEY_CURRENT_SCREEN)
         if (savedName != null) {
-            runCatching { return ScreenState.valueOf(savedName) }
+            val restored = runCatching { ScreenState.valueOf(savedName) }.getOrNull()
+            if (restored != null) {
+                if (restored == ScreenState.VAULT && !isVaultAuthorized()) {
+                    savedStateHandle[KEY_CURRENT_SCREEN] = ScreenState.VAULT_AUTH_GATE.name
+                    return ScreenState.VAULT_AUTH_GATE
+                }
+                return restored
+            }
         }
         val initial = initialProvider()
-        savedStateHandle[KEY_CURRENT_SCREEN] = initial.name
-        return initial
+        val safeInitial = if (initial == ScreenState.VAULT && !isVaultAuthorized()) {
+            ScreenState.VAULT_AUTH_GATE
+        } else {
+            initial
+        }
+        savedStateHandle[KEY_CURRENT_SCREEN] = safeInitial.name
+        return safeInitial
     }
 
     fun setScreen(screen: ScreenState) {
+        if (screen == ScreenState.VAULT) {
+            savedStateHandle[KEY_VAULT_AUTHORIZED] = true
+        } else {
+            // Leaving VAULT immediately locks the vault session
+            savedStateHandle[KEY_VAULT_AUTHORIZED] = false
+            isSystemPickerInFlight = false
+        }
+        if (screen != ScreenState.APP_SELECTION) {
+            // Leaving APP_SELECTION immediately ends the authenticated app-management session
+            savedStateHandle[KEY_APP_MGMT_AUTHORIZED] = false
+        }
         savedStateHandle[KEY_CURRENT_SCREEN] = screen.name
+    }
+
+    /**
+     * Requests access to the Files (Vault) screen from any entry point.
+     * Always routes through [ScreenState.VAULT_AUTH_GATE] first.
+     */
+    fun requestVaultAccess(returnScreen: ScreenState = ScreenState.DASHBOARD): ScreenState {
+        savedStateHandle[KEY_VAULT_AUTHORIZED] = false
+        savedStateHandle[KEY_APP_MGMT_AUTHORIZED] = false
+        isSystemPickerInFlight = false
+        val safeReturn = if (returnScreen == ScreenState.VAULT || returnScreen == ScreenState.VAULT_AUTH_GATE) {
+            ScreenState.DASHBOARD
+        } else {
+            returnScreen
+        }
+        savedStateHandle[KEY_VAULT_RETURN_SCREEN] = safeReturn.name
+        savedStateHandle[KEY_CURRENT_SCREEN] = ScreenState.VAULT_AUTH_GATE.name
+        return ScreenState.VAULT_AUTH_GATE
+    }
+
+    /**
+     * Grants single-visit authorization to open [ScreenState.VAULT] after successful PIN or Biometric verification.
+     */
+    fun authorizeVaultEntry(): ScreenState {
+        savedStateHandle[KEY_VAULT_AUTHORIZED] = true
+        savedStateHandle[KEY_CURRENT_SCREEN] = ScreenState.VAULT.name
+        return ScreenState.VAULT
+    }
+
+    /**
+     * Immediately locks the vault session (called on leaving Files, pressing Back, or app backgrounding).
+     */
+    fun lockVaultSession() {
+        savedStateHandle[KEY_VAULT_AUTHORIZED] = false
+        isSystemPickerInFlight = false
+        if (savedStateHandle.get<String>(KEY_CURRENT_SCREEN) == ScreenState.VAULT.name) {
+            savedStateHandle[KEY_CURRENT_SCREEN] = ScreenState.VAULT_AUTH_GATE.name
+        }
+    }
+
+    fun isVaultAuthorized(): Boolean =
+        (savedStateHandle.get<Boolean>(KEY_VAULT_AUTHORIZED) == true) || isSystemPickerInFlight
+
+    /**
+     * Session-scoped authorization for the Protected-App Management flow ([ScreenState.APP_SELECTION]).
+     * Active while the user remains in the management screen; revoked on exit or backgrounding.
+     */
+    fun authorizeAppManagementSession() {
+        savedStateHandle[KEY_APP_MGMT_AUTHORIZED] = true
+    }
+
+    fun lockAppManagementSession() {
+        savedStateHandle[KEY_APP_MGMT_AUTHORIZED] = false
+    }
+
+    fun isAppManagementAuthorized(): Boolean =
+        savedStateHandle.get<Boolean>(KEY_APP_MGMT_AUTHORIZED) == true
+
+    fun setSystemPickerActive(active: Boolean) {
+        isSystemPickerInFlight = active
+    }
+
+    fun isSystemPickerActive(): Boolean = isSystemPickerInFlight
+
+    fun getVaultReturnScreen(): ScreenState {
+        val name = savedStateHandle.get<String>(KEY_VAULT_RETURN_SCREEN)
+        return name?.let { runCatching { ScreenState.valueOf(it) }.getOrNull() } ?: ScreenState.DASHBOARD
     }
 
     fun getOpenedCalcFromDashboard(): Boolean {
@@ -119,17 +220,22 @@ class MainActivity : FragmentActivity() {
         val navViewModel = ViewModelProvider(this)[MainNavigationViewModel::class.java]
 
         setContent {
-            val systemInDark = androidx.compose.foundation.isSystemInDarkTheme()
             var darkThemeOverride by rememberSaveable {
                 mutableStateOf(appLockManager.preferences.isDarkThemeOverride())
             }
-            val isDarkTheme = darkThemeOverride ?: systemInDark
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            val isDarkTheme = darkThemeOverride ?: systemDark
 
             AppLockTheme(darkTheme = isDarkTheme) {
                 MainAppNavHost(
                     appLockManager = appLockManager,
                     navViewModel = navViewModel,
                     isDarkTheme = isDarkTheme,
+                    darkThemeOverride = darkThemeOverride,
+                    onSelectThemeOverride = { mode ->
+                        darkThemeOverride = mode
+                        appLockManager.preferences.setDarkThemeOverride(mode)
+                    },
                     onToggleTheme = {
                         val next = !isDarkTheme
                         darkThemeOverride = next
@@ -145,12 +251,35 @@ class MainActivity : FragmentActivity() {
 fun MainAppNavHost(
     appLockManager: AppLockManager,
     navViewModel: MainNavigationViewModel? = null,
-    isDarkTheme: Boolean = false,
+    isDarkTheme: Boolean = true,
+    darkThemeOverride: Boolean? = null,
+    onSelectThemeOverride: (Boolean?) -> Unit = {},
     onToggleTheme: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = appLockManager.preferences
 
+    var showOpeningSplash by rememberSaveable { mutableStateOf(true) }
+
+    LaunchedEffect(showOpeningSplash) {
+        if (showOpeningSplash) {
+            delay(850L)
+            showOpeningSplash = false
+        }
+    }
+
+    var isVaultAuthorizedLocal by remember {
+        mutableStateOf(navViewModel?.isVaultAuthorized() ?: false)
+    }
+    var isAppMgmtAuthorizedLocal by remember {
+        mutableStateOf(navViewModel?.isAppManagementAuthorized() ?: false)
+    }
+    var isSystemPickerActiveLocal by rememberSaveable {
+        mutableStateOf(navViewModel?.isSystemPickerActive() ?: false)
+    }
+    var vaultReturnScreen by rememberSaveable {
+        mutableStateOf(navViewModel?.getVaultReturnScreen() ?: ScreenState.DASHBOARD)
+    }
     var openedCalculatorFromDashboard by rememberSaveable {
         mutableStateOf(navViewModel?.getOpenedCalcFromDashboard() ?: false)
     }
@@ -172,27 +301,89 @@ fun MainAppNavHost(
 
     fun navigateTo(screen: ScreenState, calcFromDashboard: Boolean = openedCalculatorFromDashboard) {
         openedCalculatorFromDashboard = calcFromDashboard
-        currentScreen = screen
         navViewModel?.setOpenedCalcFromDashboard(calcFromDashboard)
+
+        if (screen != ScreenState.APP_SELECTION) {
+            isAppMgmtAuthorizedLocal = false
+            navViewModel?.lockAppManagementSession()
+        }
+
+        if (screen == ScreenState.VAULT) {
+            // Direct navigation to VAULT without authorization is strictly redirected to VAULT_AUTH_GATE
+            val isAuthorized = (navViewModel?.isVaultAuthorized() == true) || isVaultAuthorizedLocal
+            if (!isAuthorized) {
+                val targetGate = navViewModel?.requestVaultAccess(currentScreen) ?: ScreenState.VAULT_AUTH_GATE
+                vaultReturnScreen = navViewModel?.getVaultReturnScreen() ?: currentScreen
+                currentScreen = targetGate
+                return
+            }
+        } else {
+            // Leaving VAULT immediately locks the vault session
+            isVaultAuthorizedLocal = false
+            isSystemPickerActiveLocal = false
+            navViewModel?.lockVaultSession()
+        }
+
+        currentScreen = screen
         navViewModel?.setScreen(screen)
     }
 
-    // Relock Smart AppLock & Vault session automatically if screen turns off
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+    fun requestOpenVault(fromScreen: ScreenState = currentScreen) {
+        isVaultAuthorizedLocal = false
+        isAppMgmtAuthorizedLocal = false
+        isSystemPickerActiveLocal = false
+        navViewModel?.lockAppManagementSession()
+        val safeReturn = if (fromScreen == ScreenState.VAULT || fromScreen == ScreenState.VAULT_AUTH_GATE) {
+            ScreenState.DASHBOARD
+        } else {
+            fromScreen
+        }
+        vaultReturnScreen = safeReturn
+        val target = navViewModel?.requestVaultAccess(safeReturn) ?: ScreenState.VAULT_AUTH_GATE
+        currentScreen = target
+    }
+
+    fun completeVaultAuthentication() {
+        isVaultAuthorizedLocal = true
+        val target = navViewModel?.authorizeVaultEntry() ?: ScreenState.VAULT
+        currentScreen = target
+    }
+
+    // Lifecycle observer:
+    // 1. Locks the Files Vault and App Management session whenever the app goes into the background.
+    // 2. Relocks the entire app if the screen turns off and relock-on-screen-off is enabled.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
                 val activity = context as? android.app.Activity
                 val isChangingConfigs = activity?.isChangingConfigurations == true
-                val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
-                val isScreenOff = powerManager != null && !powerManager.isInteractive
-                if (!isChangingConfigs && isScreenOff && prefs.isRelockOnScreenOff() && prefs.isPinConfigured()) {
-                    val target = if (prefs.isCalculatorDisguiseEnabled()) {
-                        ScreenState.CALCULATOR_GATEWAY
-                    } else {
-                        ScreenState.AUTH_GATE
+                val pickerInFlight = (navViewModel?.isSystemPickerActive() == true) || isSystemPickerActiveLocal
+
+                if (!isChangingConfigs && !pickerInFlight) {
+                    val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                    val isScreenOff = powerManager != null && !powerManager.isInteractive
+
+                    // End active App Management session on backgrounding
+                    isAppMgmtAuthorizedLocal = false
+                    navViewModel?.lockAppManagementSession()
+
+                    // Always lock the Vault when the app goes to background
+                    if (currentScreen == ScreenState.VAULT) {
+                        isVaultAuthorizedLocal = false
+                        navViewModel?.lockVaultSession()
+                        currentScreen = ScreenState.VAULT_AUTH_GATE
+                        navViewModel?.setScreen(ScreenState.VAULT_AUTH_GATE)
                     }
-                    navigateTo(target, calcFromDashboard = false)
+
+                    if (isScreenOff && prefs.isRelockOnScreenOff() && prefs.isPinConfigured()) {
+                        val target = if (prefs.isCalculatorDisguiseEnabled()) {
+                            ScreenState.CALCULATOR_GATEWAY
+                        } else {
+                            ScreenState.AUTH_GATE
+                        }
+                        navigateTo(target, calcFromDashboard = false)
+                    }
                 }
             }
         }
@@ -200,6 +391,13 @@ fun MainAppNavHost(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
+    }
+
+    if (showOpeningSplash) {
+        OpeningSplashScreen(
+            onSplashComplete = { showOpeningSplash = false }
+        )
+        return
     }
 
     AnimatedContent(
@@ -211,6 +409,10 @@ fun MainAppNavHost(
             ScreenState.AUTH_GATE -> {
                 DashboardAuthGate(
                     appLockManager = appLockManager,
+                    title = "Enter PIN",
+                    subtitle = "Unlock your secure space",
+                    currentBottomTab = MainBottomTab.HOME,
+                    onSelectBottomTab = null,
                     onUnlockSuccess = { navigateTo(ScreenState.DASHBOARD) }
                 )
             }
@@ -228,17 +430,21 @@ fun MainAppNavHost(
                         navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false)
                     }
                 }
-                com.example.ui.calculator.CalculatorVaultScreen(
+                CalculatorVaultScreen(
                     preferences = prefs,
                     isStandaloneDisguiseMode = !openedCalculatorFromDashboard,
                     onGatewayUnlocked = {
-                        navigateTo(ScreenState.VAULT, calcFromDashboard = false)
+                        // CalculatorVaultScreen already verified Master PIN / Biometric in AuthChallengeDialog
+                        completeVaultAuthentication()
                     },
                     onNavigateBack = if (openedCalculatorFromDashboard) {
                         {
                             navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false)
                         }
-                    } else null
+                    } else null,
+                    onNavigateToApps = { navigateTo(ScreenState.APP_SELECTION, calcFromDashboard = false) },
+                    onNavigateToFiles = { requestOpenVault(ScreenState.DASHBOARD) },
+                    onNavigateToSettings = { navigateTo(ScreenState.SETTINGS, calcFromDashboard = false) }
                 )
             }
 
@@ -251,11 +457,13 @@ fun MainAppNavHost(
                 DashboardScreen(
                     appLockManager = appLockManager,
                     isDarkTheme = isDarkTheme,
+                    darkThemeOverride = darkThemeOverride,
+                    onSelectThemeOverride = onSelectThemeOverride,
                     onToggleTheme = onToggleTheme,
                     onNavigateToAppSelection = { navigateTo(ScreenState.APP_SELECTION) },
                     onNavigateToSettings = { navigateTo(ScreenState.SETTINGS) },
                     onNavigateToTestLock = { navigateTo(ScreenState.TEST_LOCK) },
-                    onNavigateToVault = { navigateTo(ScreenState.VAULT) },
+                    onNavigateToVault = { requestOpenVault(ScreenState.DASHBOARD) },
                     onNavigateToCalculator = {
                         navigateTo(ScreenState.CALCULATOR_GATEWAY, calcFromDashboard = true)
                     }
@@ -266,7 +474,14 @@ fun MainAppNavHost(
                 BackHandler { navigateTo(ScreenState.DASHBOARD) }
                 AppSelectionScreen(
                     preferences = prefs,
-                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) }
+                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) },
+                    onNavigateToFiles = { requestOpenVault(ScreenState.APP_SELECTION) },
+                    onNavigateToSettings = { navigateTo(ScreenState.SETTINGS) },
+                    isManagementSessionAuthenticated = isAppMgmtAuthorizedLocal || (navViewModel?.isAppManagementAuthorized() == true),
+                    onManagementSessionAuthorized = {
+                        isAppMgmtAuthorizedLocal = true
+                        navViewModel?.authorizeAppManagementSession()
+                    }
                 )
             }
 
@@ -275,39 +490,162 @@ fun MainAppNavHost(
                 SettingsScreen(
                     preferences = prefs,
                     onNavigateBack = { navigateTo(ScreenState.DASHBOARD) },
-                    onResetCompleted = { navigateTo(ScreenState.ONBOARDING, calcFromDashboard = false) }
+                    onResetCompleted = { navigateTo(ScreenState.ONBOARDING, calcFromDashboard = false) },
+                    onNavigateToApps = { navigateTo(ScreenState.APP_SELECTION) },
+                    onNavigateToFiles = { requestOpenVault(ScreenState.SETTINGS) }
                 )
             }
 
             ScreenState.TEST_LOCK -> {
                 BackHandler { navigateTo(ScreenState.DASHBOARD) }
                 TestLockScreen(
-                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) }
+                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) },
+                    onNavigateToApps = { navigateTo(ScreenState.APP_SELECTION) },
+                    onNavigateToFiles = { requestOpenVault(ScreenState.TEST_LOCK) },
+                    onNavigateToSettings = { navigateTo(ScreenState.SETTINGS) }
+                )
+            }
+
+            ScreenState.VAULT_AUTH_GATE -> {
+                val cancelTarget = vaultReturnScreen.takeIf {
+                    it != ScreenState.VAULT && it != ScreenState.VAULT_AUTH_GATE
+                } ?: ScreenState.DASHBOARD
+
+                BackHandler {
+                    navigateTo(cancelTarget, calcFromDashboard = false)
+                }
+
+                DashboardAuthGate(
+                    appLockManager = appLockManager,
+                    title = "Enter PIN",
+                    subtitle = "Unlock your secure space",
+                    currentBottomTab = MainBottomTab.FILES,
+                    onSelectBottomTab = { tab ->
+                        when (tab) {
+                            MainBottomTab.HOME -> navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false)
+                            MainBottomTab.APPS -> navigateTo(ScreenState.APP_SELECTION, calcFromDashboard = false)
+                            MainBottomTab.FILES -> {}
+                            MainBottomTab.SETTINGS -> navigateTo(ScreenState.SETTINGS, calcFromDashboard = false)
+                        }
+                    },
+                    onUnlockSuccess = {
+                        completeVaultAuthentication()
+                    }
                 )
             }
 
             ScreenState.VAULT -> {
-                val returnScreen = if (prefs.isCalculatorDisguiseEnabled()) {
-                    ScreenState.CALCULATOR_GATEWAY
-                } else {
-                    ScreenState.DASHBOARD
+                val isAuthorized = (navViewModel?.isVaultAuthorized() == true) ||
+                        isVaultAuthorizedLocal ||
+                        isSystemPickerActiveLocal
+
+                if (currentScreen == ScreenState.VAULT && !isAuthorized) {
+                    // Fail-safe guard: only redirect if VAULT is the active target screen and unauthorized.
+                    // Never redirect during exit transitions when navigating from Files to Home/Apps/Settings.
+                    LaunchedEffect(currentScreen, isAuthorized) {
+                        if (currentScreen == ScreenState.VAULT && !isAuthorized) {
+                            requestOpenVault(ScreenState.DASHBOARD)
+                        }
+                    }
+                } else if (currentScreen == ScreenState.VAULT) {
+                    val returnScreen = vaultReturnScreen.takeIf {
+                        it != ScreenState.VAULT && it != ScreenState.VAULT_AUTH_GATE
+                    } ?: ScreenState.DASHBOARD
+                    BackHandler { navigateTo(returnScreen, calcFromDashboard = false) }
+                    VaultScreen(
+                        onNavigateBack = { navigateTo(returnScreen, calcFromDashboard = false) },
+                        onOpenDashboard = { navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false) },
+                        onNavigateToApps = { navigateTo(ScreenState.APP_SELECTION, calcFromDashboard = false) },
+                        onNavigateToSettings = { navigateTo(ScreenState.SETTINGS, calcFromDashboard = false) },
+                        onSystemPickerLaunched = {
+                            isSystemPickerActiveLocal = true
+                            navViewModel?.setSystemPickerActive(true)
+                        },
+                        onSystemPickerFinished = {
+                            isSystemPickerActiveLocal = false
+                            navViewModel?.setSystemPickerActive(false)
+                        }
+                    )
                 }
-                BackHandler { navigateTo(returnScreen, calcFromDashboard = false) }
-                com.example.ui.vault.VaultScreen(
-                    onNavigateBack = { navigateTo(returnScreen, calcFromDashboard = false) },
-                    onOpenDashboard = { navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false) }
-                )
             }
         }
     }
 }
 
 /**
- * Gatekeeper requiring master PIN or Biometric to open the Smart AppLock configuration dashboard.
+ * Internal Splash / Opening Screen matching Panel 1 of the reference design and using the exact attached S-lock logo.
+ */
+@Composable
+fun OpeningSplashScreen(
+    onSplashComplete: () -> Unit = {}
+) {
+    Scaffold(
+        containerColor = Color(0xFF0B0B0E),
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("opening_splash_screen")
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF1A1405),
+                            Color(0xFF0B0B0E),
+                            Color(0xFF140F04)
+                        )
+                    )
+                )
+                .padding(innerPadding)
+                .padding(horizontal = 28.dp, vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            NeoGoldPadlockEmblem(
+                badgeSize = 148.dp,
+                isOpenShackle = false,
+                modifier = Modifier.testTag("splash_app_logo")
+            )
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            com.example.ui.common.NeoBrandTitle(fontSize = 30.sp)
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Your Privacy\nOur Priority",
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color(0xFF9CA3AF),
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            Text(
+                text = "Developed by Yasir A Khan",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = NeoPalette.PrimaryGold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.testTag("splash_developer_credit")
+            )
+        }
+    }
+}
+
+/**
+ * Gatekeeper requiring master PIN or Biometric to open Smart AppLock or the Private File Vault.
+ * Matches Panel 2 of the Black & Gold Neomorphism reference image.
  */
 @Composable
 fun DashboardAuthGate(
     appLockManager: AppLockManager,
+    title: String = "Enter PIN",
+    subtitle: String = "Unlock your secure space",
+    currentBottomTab: MainBottomTab? = MainBottomTab.HOME,
+    onSelectBottomTab: ((MainBottomTab) -> Unit)? = null,
     onUnlockSuccess: () -> Unit
 ) {
     val context = LocalContext.current
@@ -315,7 +653,6 @@ fun DashboardAuthGate(
     val prefs = appLockManager.preferences
     val pinLength = prefs.getPinLength()
     val scope = rememberCoroutineScope()
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
     var enteredPin by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
@@ -331,8 +668,8 @@ fun DashboardAuthGate(
         if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
             BiometricHelper.showBiometricPrompt(
                 activity = activity,
-                title = "Unlock Smart AppLock",
-                subtitle = "Touch the fingerprint sensor to access dashboard",
+                title = title,
+                subtitle = subtitle,
                 negativeButtonText = "Use PIN",
                 onSuccess = {
                     prefs.resetFailedAttempts()
@@ -349,7 +686,6 @@ fun DashboardAuthGate(
         }
     }
 
-    // Automatically challenge with biometric authentication when opening the app
     LaunchedEffect(Unit) {
         if (isBiometricEnabled && lockoutSeconds == 0) {
             delay(250L)
@@ -364,61 +700,82 @@ fun DashboardAuthGate(
         }
     }
 
-    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+    Scaffold(
+        containerColor = NeoPalette.BackgroundBase,
+        bottomBar = {
+            NeoBottomNavigationBar(
+                currentTab = currentBottomTab,
+                onSelectTab = { tab ->
+                    onSelectBottomTab?.invoke(tab)
+                }
+            )
+        },
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("auth_gate_screen")
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = if (NeoPalette.isDarkMode) {
+                            listOf(
+                                Color(0xFF181305),
+                                NeoPalette.BackgroundBase,
+                                Color(0xFF120E04)
+                            )
+                        } else {
+                            listOf(
+                                NeoPalette.BackgroundBase,
+                                NeoPalette.SurfaceElevated,
+                                NeoPalette.BackgroundBase
+                            )
+                        }
+                    )
+                )
                 .padding(innerPadding)
-                .padding(24.dp),
+                .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Spacer(modifier = Modifier.height(36.dp))
-
-                Box(
-                    modifier = Modifier
-                        .size(76.dp)
-                        .shadow(8.dp, CircleShape, spotColor = NeoPalette.PrimaryCyan)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                if (isDarkTheme) {
-                                    listOf(NeoPalette.SurfaceElevated, NeoPalette.SurfaceDark)
-                                } else {
-                                    listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
-                                }
-                            )
-                        )
-                        .border(1.5.dp, NeoPalette.PrimaryCyan.copy(alpha = 0.6f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Shield,
-                        contentDescription = "Security Shield",
-                        tint = NeoPalette.PrimaryCyan,
-                        modifier = Modifier.size(38.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Text(
-                    text = "Smart AppLock Security",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-
                 Spacer(modifier = Modifier.height(8.dp))
 
+                NeoGoldPadlockEmblem(
+                    badgeSize = 86.dp,
+                    isOpenShackle = true
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
                 Text(
-                    text = if (isBiometricEnabled) "Use fingerprint or enter master PIN" else "Enter master PIN to manage protected apps",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = "Developed by Yasir A Khan",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = NeoPalette.PrimaryGold,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = NeoPalette.TextSecondary,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
 
                 PinDots(
                     pinLength = pinLength,
@@ -427,11 +784,11 @@ fun DashboardAuthGate(
                 )
 
                 if (errorMsg != null) {
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = errorMsg ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = NeoPalette.ErrorRed,
                         fontWeight = FontWeight.Medium
                     )
                 }
@@ -477,25 +834,23 @@ fun DashboardAuthGate(
                 },
                 lockoutSeconds = lockoutSeconds,
                 extraLeftAction = {
-                    if (isBiometricEnabled) {
-                        NeoCircularButton(
-                            onClick = { triggerBiometricPrompt() },
-                            size = 56.dp,
-                            accentGlow = NeoPalette.PrimaryCyan.copy(alpha = 0.45f),
-                            modifier = Modifier.testTag("dashboard_biometric_trigger_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Fingerprint,
-                                contentDescription = "Unlock with Fingerprint",
-                                tint = NeoPalette.PrimaryCyan,
-                                modifier = Modifier.size(30.dp)
-                            )
-                        }
+                    NeoCircularButton(
+                        onClick = { triggerBiometricPrompt() },
+                        size = 70.dp,
+                        isGoldSolid = true,
+                        modifier = Modifier.testTag("dashboard_biometric_trigger_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Fingerprint,
+                            contentDescription = "Unlock with Fingerprint",
+                            tint = NeoPalette.TextInverse,
+                            modifier = Modifier.size(32.dp)
+                        )
                     }
                 }
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
         }
     }
 }

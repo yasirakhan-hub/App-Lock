@@ -7,10 +7,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,47 +24,39 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -82,15 +74,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -99,35 +94,65 @@ import com.example.data.vault.DuplicateVaultItemException
 import com.example.data.vault.VaultCategory
 import com.example.data.vault.VaultItem
 import com.example.data.vault.VaultRepository
+import com.example.ui.common.MainBottomTab
+import com.example.ui.common.NeoBottomNavigationBar
 import com.example.ui.common.NeoButton
 import com.example.ui.common.NeoCard
 import com.example.ui.common.NeoInsetBox
 import com.example.ui.common.NeoPalette
 import com.example.ui.common.NeoShapes
 import com.example.ui.common.NeoStatusBadge
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private enum class VaultFilterPill {
+    PHOTOS,
+    VIDEOS,
+    DOCUMENTS,
+    OTHERS
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VaultScreen(
     onNavigateBack: () -> Unit,
     onOpenDashboard: (() -> Unit)? = null,
+    onNavigateToApps: (() -> Unit)? = null,
+    onNavigateToSettings: (() -> Unit)? = null,
+    onSystemPickerLaunched: () -> Unit = {},
+    onSystemPickerFinished: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val repository = remember { VaultRepository(context) }
     val scope = rememberCoroutineScope()
 
-    var selectedCategoryName by rememberSaveable { mutableStateOf(VaultCategory.PICTURE.name) }
-    val selectedCategory = remember(selectedCategoryName) {
-        runCatching { VaultCategory.valueOf(selectedCategoryName) }.getOrDefault(VaultCategory.PICTURE)
+    var selectedPillName by rememberSaveable { mutableStateOf(VaultFilterPill.PHOTOS.name) }
+    val selectedPill = remember(selectedPillName) {
+        runCatching { VaultFilterPill.valueOf(selectedPillName) }.getOrDefault(VaultFilterPill.PHOTOS)
+    }
+
+    val selectedCategory = remember(selectedPill) {
+        when (selectedPill) {
+            VaultFilterPill.PHOTOS -> VaultCategory.PICTURE
+            VaultFilterPill.VIDEOS -> VaultCategory.VIDEO
+            VaultFilterPill.DOCUMENTS, VaultFilterPill.OTHERS -> VaultCategory.DOCUMENT
+        }
     }
 
     var items by remember { mutableStateOf<List<VaultItem>>(emptyList()) }
+    var allRecentItems by remember { mutableStateOf<List<VaultItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+
+    // Importing progress state (Panel 6)
+    var isImporting by remember { mutableStateOf(false) }
+    var importProgressPercent by remember { mutableIntStateOf(0) }
+    var importStepIndex by remember { mutableIntStateOf(0) }
+    var activeImportJob by remember { mutableStateOf<Job?>(null) }
 
     var selectedItemForDetail by remember { mutableStateOf<VaultItem?>(null) }
     var itemToExportId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -143,31 +168,64 @@ fun VaultScreen(
     fun refreshItems() {
         scope.launch {
             isLoading = true
-            items = repository.getItems(selectedCategory)
+            allRecentItems = repository.getAllItems().sortedByDescending { it.importedTimestamp }
+            items = when (selectedPill) {
+                VaultFilterPill.PHOTOS -> repository.getItems(VaultCategory.PICTURE)
+                VaultFilterPill.VIDEOS -> repository.getItems(VaultCategory.VIDEO)
+                VaultFilterPill.DOCUMENTS -> repository.getItems(VaultCategory.DOCUMENT)
+                VaultFilterPill.OTHERS -> repository.getAllItems()
+            }
             isLoading = false
         }
     }
 
-    LaunchedEffect(selectedCategory) {
+    LaunchedEffect(selectedPill) {
         refreshItems()
     }
 
+    // Immediately clear sensitive vault lists and open previews from memory when leaving Files
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            activeImportJob?.cancel()
+            selectedItemForDetail = null
+            showDeleteConfirmDialog = null
+            showImportSuccessDialog = null
+            items = emptyList()
+            allRecentItems = emptyList()
+        }
+    }
+
     BackHandler {
-        onNavigateBack()
+        if (showImportSuccessDialog != null) {
+            showImportSuccessDialog = null
+        } else if (isImporting) {
+            activeImportJob?.cancel()
+            isImporting = false
+        } else {
+            onNavigateBack()
+        }
     }
 
     fun handleBatchImport(uris: List<Uri>, mediaLabel: String) {
+        onSystemPickerFinished()
         if (uris.isEmpty()) {
             // User cancelled system picker; remain on VaultScreen without error
             return
         }
-        scope.launch {
-            isLoading = true
+        activeImportJob = scope.launch {
+            isImporting = true
+            importStepIndex = 0
+            importProgressPercent = 18
+            delay(120L)
+
             val importedList = mutableListOf<VaultItem>()
             var duplicateCount = 0
             var failureCount = 0
 
-            uris.forEach { uri ->
+            importStepIndex = 1
+            importProgressPercent = 45
+
+            uris.forEachIndexed { idx, uri ->
                 val result = repository.importFromUri(uri)
                 result.onSuccess { importedItem ->
                     importedList.add(importedItem)
@@ -179,16 +237,30 @@ fun VaultScreen(
                         failureCount++
                     }
                 }
+                importStepIndex = 2
+                importProgressPercent = 55 + (((idx + 1) * 35) / uris.size.coerceAtLeast(1))
             }
 
-            // If imported items belong to a single category different from current tab, switch to it
+            importStepIndex = 3
+            importProgressPercent = 96
+            delay(120L)
+
             if (importedList.isNotEmpty() && importedList.none { it.category == selectedCategory }) {
-                selectedCategoryName = importedList.first().category.name
+                selectedPillName = when (importedList.first().category) {
+                    VaultCategory.PICTURE -> VaultFilterPill.PHOTOS.name
+                    VaultCategory.VIDEO -> VaultFilterPill.VIDEOS.name
+                    VaultCategory.DOCUMENT -> VaultFilterPill.DOCUMENTS.name
+                }
             }
 
-            items = repository.getItems(
-                runCatching { VaultCategory.valueOf(selectedCategoryName) }.getOrDefault(selectedCategory)
-            )
+            allRecentItems = repository.getAllItems().sortedByDescending { it.importedTimestamp }
+            items = when (runCatching { VaultFilterPill.valueOf(selectedPillName) }.getOrDefault(selectedPill)) {
+                VaultFilterPill.PHOTOS -> repository.getItems(VaultCategory.PICTURE)
+                VaultFilterPill.VIDEOS -> repository.getItems(VaultCategory.VIDEO)
+                VaultFilterPill.DOCUMENTS -> repository.getItems(VaultCategory.DOCUMENT)
+                VaultFilterPill.OTHERS -> repository.getAllItems()
+            }
+            isImporting = false
             isLoading = false
 
             when {
@@ -241,6 +313,7 @@ fun VaultScreen(
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { destUri ->
+        onSystemPickerFinished()
         val exportId = itemToExportId
         val item = exportId?.let { id -> repository.getAllItems().find { it.id == id } }
         if (destUri != null && item != null) {
@@ -265,6 +338,7 @@ fun VaultScreen(
     val backupLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { destUri ->
+        onSystemPickerFinished()
         val passphrase = pendingBackupPassphrase
         if (destUri != null && passphrase != null) {
             scope.launch {
@@ -298,6 +372,7 @@ fun VaultScreen(
     val restorePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { srcUri ->
+        onSystemPickerFinished()
         val passphrase = pendingRestorePassphrase
         if (srcUri != null && passphrase != null) {
             scope.launch {
@@ -327,31 +402,76 @@ fun VaultScreen(
         }
     }
 
+    fun launchPickerForCurrentCategory() {
+        onSystemPickerLaunched()
+        when (selectedPill) {
+            VaultFilterPill.PHOTOS -> {
+                mediaPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            }
+            VaultFilterPill.VIDEOS -> {
+                mediaPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                )
+            }
+            VaultFilterPill.DOCUMENTS, VaultFilterPill.OTHERS -> {
+                docPickerLauncher.launch(arrayOf("*/*"))
+            }
+        }
+    }
+
+    // Panel 6: Importing Files Fullscreen View
+    if (isImporting) {
+        ImportingFilesScreen(
+            progressPercent = importProgressPercent,
+            currentStepIndex = importStepIndex,
+            onCancel = {
+                activeImportJob?.cancel()
+                isImporting = false
+            }
+        )
+        return
+    }
+
+    // Panel 7: Import Successful Fullscreen View
+    showImportSuccessDialog?.let { importedItems ->
+        ImportSuccessScreen(
+            importedCount = importedItems.size,
+            onViewFiles = { showImportSuccessDialog = null },
+            onDone = { showImportSuccessDialog = null }
+        )
+        return
+    }
+
     Scaffold(
+        containerColor = NeoPalette.BackgroundBase,
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            text = "Encrypted File Vault",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "AES-256-GCM hardware protection",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = "Hide Files",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = NeoPalette.TextPrimary
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack, modifier = Modifier.testTag("vault_back_button")) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = NeoPalette.TextPrimary
+                        )
                     }
                 },
                 actions = {
                     IconButton(onClick = { showMenu = true }, modifier = Modifier.testTag("vault_menu_button")) {
-                        Icon(imageVector = Icons.Default.MoreVert, contentDescription = "More")
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "More",
+                            tint = NeoPalette.TextPrimary
+                        )
                     }
                     DropdownMenu(
                         expanded = showMenu,
@@ -375,7 +495,7 @@ fun VaultScreen(
                         )
                         if (onOpenDashboard != null) {
                             DropdownMenuItem(
-                                text = { Text("Open AppLock Dashboard") },
+                                text = { Text("Lock Vault & Return Home") },
                                 leadingIcon = { Icon(Icons.Default.Security, contentDescription = null) },
                                 onClick = {
                                     showMenu = false
@@ -386,8 +506,21 @@ fun VaultScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = NeoPalette.BackgroundBase
                 )
+            )
+        },
+        bottomBar = {
+            NeoBottomNavigationBar(
+                currentTab = MainBottomTab.FILES,
+                onSelectTab = { tab ->
+                    when (tab) {
+                        MainBottomTab.HOME -> (onOpenDashboard ?: onNavigateBack)()
+                        MainBottomTab.APPS -> (onNavigateToApps ?: onNavigateBack)()
+                        MainBottomTab.FILES -> {}
+                        MainBottomTab.SETTINGS -> (onNavigateToSettings ?: onNavigateBack)()
+                    }
+                }
             )
         },
         modifier = modifier.fillMaxSize()
@@ -396,66 +529,53 @@ fun VaultScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 8.dp)
         ) {
-            // Neomorphic Segmented Category Filter Bar
-            Box(
+            // Category Pill Row matching Panel 5: Photos, Videos, Documents, Others
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                NeoInsetBox(
-                    shape = NeoShapes.MediumCard,
-                    contentPadding = PaddingValues(6.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                val pills = listOf(
+                    Triple(VaultFilterPill.PHOTOS, "Photos", "vault_tab_picture"),
+                    Triple(VaultFilterPill.VIDEOS, "Videos", "vault_tab_video"),
+                    Triple(VaultFilterPill.DOCUMENTS, "Documents", "vault_tab_document"),
+                    Triple(VaultFilterPill.OTHERS, "Others", "vault_tab_others")
+                )
+                pills.forEach { (pill, label, tag) ->
+                    val isSelected = selectedPill == pill
+                    NeoButton(
+                        onClick = { selectedPillName = pill.name },
+                        isPrimaryGlowing = isSelected,
+                        shape = NeoShapes.FullPill,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag(tag)
                     ) {
-                        VaultCategory.entries.forEach { cat ->
-                            val isSelected = selectedCategory == cat
-                            val count = repository.getItemCount(cat)
-                            val label = when (cat) {
-                                VaultCategory.PICTURE -> "Pictures"
-                                VaultCategory.VIDEO -> "Videos"
-                                VaultCategory.DOCUMENT -> "Docs"
-                            }
-                            NeoButton(
-                                onClick = { selectedCategoryName = cat.name },
-                                isPrimaryGlowing = isSelected,
-                                shape = NeoShapes.SmallControl,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("vault_tab_${cat.name.lowercase(Locale.US)}")
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Text(
-                                        text = if (count > 0) "$label ($count)" else label,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        fontSize = 12.sp,
-                                        color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
+                        Text(
+                            text = label,
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) NeoPalette.TextInverse else NeoPalette.TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
 
-            // Neomorphic Status Alert Banner
+            // Status Alert Banner
             AnimatedVisibility(visible = statusMessage != null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(vertical = 6.dp)
                 ) {
-                    val accentColor = if (isErrorStatus) NeoPalette.ErrorRed else NeoPalette.PrimaryCyan
+                    val accentColor = if (isErrorStatus) NeoPalette.ErrorRed else NeoPalette.PrimaryGold
                     NeoCard(
                         shape = NeoShapes.SmallControl,
                         accentBorder = accentColor.copy(alpha = 0.6f),
@@ -470,14 +590,14 @@ fun VaultScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             NeoStatusBadge(
-                                text = if (isErrorStatus) "Alert" else "Status",
+                                text = if (isErrorStatus) "Alert" else "Vault",
                                 color = accentColor
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = statusMessage ?: "",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                color = NeoPalette.TextPrimary,
                                 fontWeight = FontWeight.Medium,
                                 modifier = Modifier.weight(1f)
                             )
@@ -488,7 +608,7 @@ fun VaultScreen(
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Dismiss",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = NeoPalette.TextSecondary,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -497,199 +617,180 @@ fun VaultScreen(
                 }
             }
 
-            // Subheader with Quick Import CTA
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 3-Column Grid matching Panel 5: "+ Import" square card + media/document tiles
+            val gridPreviewItems = items.take(5)
+            val totalSlots = 1 + gridPreviewItems.size
+            val rowCount = (totalSlots + 2) / 3
+
+            for (rowIndex in 0 until rowCount) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    for (colIndex in 0 until 3) {
+                        val flatIndex = rowIndex * 3 + colIndex
+                        if (flatIndex == 0) {
+                            // First tile: "+ Import" card matching Panel 5
+                            NeoCard(
+                                onClick = { launchPickerForCurrentCategory() },
+                                shape = NeoShapes.MediumCard,
+                                accentBorder = NeoPalette.PrimaryGold.copy(alpha = 0.45f),
+                                elevation = 6.dp,
+                                contentPadding = PaddingValues(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .testTag("vault_import_button")
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Import",
+                                        tint = NeoPalette.PrimaryGold,
+                                        modifier = Modifier.size(34.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = "Import",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = NeoPalette.TextPrimary
+                                    )
+                                }
+                            }
+                        } else if (flatIndex - 1 < gridPreviewItems.size) {
+                            val vaultItem = gridPreviewItems[flatIndex - 1]
+                            VaultGridTile(
+                                item = vaultItem,
+                                repository = repository,
+                                onClick = { selectedItemForDetail = vaultItem },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            // Document Type Showcase Row when vault has fewer than 3 items (or in Documents/Others view)
+            if (items.isEmpty() && !isLoading) {
+                NeoCard(
+                    shape = NeoShapes.MediumCard,
+                    contentPadding = PaddingValues(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No files in this category yet",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = NeoPalette.TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Tap '+ Import' above to encrypt photos, videos, PDFs, or documents with hardware-backed AES-256-GCM.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NeoPalette.TextSecondary
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // "Recent" Section Header matching Panel 5
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = when (selectedCategory) {
-                            VaultCategory.PICTURE -> "Private Photos"
-                            VaultCategory.VIDEO -> "Private Videos"
-                            VaultCategory.DOCUMENT -> "Private Documents"
-                        },
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Encrypted in app-private storage",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                NeoButton(
-                    text = when (selectedCategory) {
-                        VaultCategory.PICTURE -> "+ Import Photos"
-                        VaultCategory.VIDEO -> "+ Import Videos"
-                        VaultCategory.DOCUMENT -> "+ Import Docs"
-                    },
-                    icon = Icons.Default.Add,
-                    isPrimaryGlowing = true,
-                    onClick = {
-                        when (selectedCategory) {
-                            VaultCategory.PICTURE -> {
-                                mediaPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            }
-                            VaultCategory.VIDEO -> {
-                                mediaPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                                )
-                            }
-                            VaultCategory.DOCUMENT -> {
-                                docPickerLauncher.launch(arrayOf("*/*"))
-                            }
-                        }
-                    },
-                    shape = NeoShapes.SmallControl,
-                    modifier = Modifier.testTag("vault_import_button")
+                Text(
+                    text = "Recent",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = NeoPalette.TextSecondary
                 )
             }
 
-            // Main Vault Content
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                if (isLoading) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = NeoPalette.PrimaryGold)
+                }
+            } else if (allRecentItems.isEmpty()) {
+                NeoCard(
+                    shape = NeoShapes.MediumCard,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Decrypting vault records...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = NeoPalette.PrimaryGold,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Your recent encrypted vault files will appear here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NeoPalette.TextSecondary
+                        )
                     }
-                } else if (items.isEmpty()) {
-                    EmptyVaultState(
-                        category = selectedCategory,
-                        onImportClick = {
-                            when (selectedCategory) {
-                                VaultCategory.PICTURE -> mediaPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                                VaultCategory.VIDEO -> mediaPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                                )
-                                VaultCategory.DOCUMENT -> docPickerLauncher.launch(arrayOf("*/*"))
-                            }
-                        }
-                    )
-                } else {
-                    when (selectedCategory) {
-                        VaultCategory.PICTURE -> {
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(2),
-                                contentPadding = PaddingValues(16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                items(items, key = { it.id }) { item ->
-                                    PictureVaultCard(
-                                        item = item,
-                                        repository = repository,
-                                        onClick = { selectedItemForDetail = item }
-                                    )
-                                }
-                            }
-                        }
-                        VaultCategory.VIDEO, VaultCategory.DOCUMENT -> {
-                            LazyColumn(
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                items(items, key = { it.id }) { item ->
-                                    FileVaultRow(
-                                        item = item,
-                                        onClick = { selectedItemForDetail = item },
-                                        onExport = {
-                                            itemToExportId = item.id
-                                            exportLauncher.launch(item.originalFileName)
-                                        },
-                                        onDelete = { showDeleteConfirmDialog = item }
-                                    )
-                                }
-                            }
-                        }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    allRecentItems.forEach { item ->
+                        RecentVaultItemRow(
+                            item = item,
+                            repository = repository,
+                            onClick = { selectedItemForDetail = item }
+                        )
                     }
                 }
             }
-        }
 
-        // Import Success & Original Deletion Dialog
-        showImportSuccessDialog?.let { importedItems ->
-            AlertDialog(
-                onDismissRequest = { showImportSuccessDialog = null },
-                icon = { Icon(Icons.Default.Security, contentDescription = null, tint = NeoPalette.SuccessGreen) },
-                title = { Text("Vault Ingestion Complete", fontWeight = FontWeight.Bold) },
-                text = {
-                    Column {
-                        Text(
-                            text = "${importedItems.size} item(s) securely encrypted into vault.",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Original files on your public device storage remain untouched. Would you like to keep the originals, or delete them manually from your gallery?",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                confirmButton = {
-                    NeoButton(
-                        text = "Keep Originals (Default)",
-                        isPrimaryGlowing = true,
-                        shape = NeoShapes.SmallControl,
-                        onClick = { showImportSuccessDialog = null }
-                    )
-                },
-                dismissButton = {
-                    NeoButton(
-                        text = "Understood",
-                        shape = NeoShapes.SmallControl,
-                        onClick = {
-                            showImportSuccessDialog = null
-                            isErrorStatus = false
-                            statusMessage = "You can safely delete the original files in your Gallery or Files app."
-                        }
-                    )
-                }
-            )
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         // Delete Item Confirmation
         showDeleteConfirmDialog?.let { item ->
             AlertDialog(
                 onDismissRequest = { showDeleteConfirmDialog = null },
-                icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                title = { Text("Delete From Vault?", fontWeight = FontWeight.Bold) },
+                containerColor = NeoPalette.SurfaceDark,
+                icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = NeoPalette.ErrorRed) },
+                title = { Text("Delete From Vault?", fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary) },
                 text = {
-                    Text("This will permanently destroy the encrypted copy of '${item.originalFileName}'. This action cannot be undone.")
+                    Text(
+                        "This will permanently destroy the encrypted copy of '${item.originalFileName}'. This action cannot be undone.",
+                        color = NeoPalette.TextSecondary
+                    )
                 },
                 confirmButton = {
                     NeoButton(
                         text = "Delete Permanently",
                         isDestructive = true,
-                        shape = NeoShapes.SmallControl,
+                        shape = NeoShapes.FullPill,
                         onClick = {
                             repository.deleteItem(item)
                             showDeleteConfirmDialog = null
@@ -703,7 +804,7 @@ fun VaultScreen(
                 dismissButton = {
                     NeoButton(
                         text = "Cancel",
-                        shape = NeoShapes.SmallControl,
+                        shape = NeoShapes.FullPill,
                         onClick = { showDeleteConfirmDialog = null }
                     )
                 }
@@ -718,6 +819,7 @@ fun VaultScreen(
                 onDismiss = { selectedItemForDetail = null },
                 onExport = {
                     itemToExportId = item.id
+                    onSystemPickerLaunched()
                     exportLauncher.launch(item.originalFileName)
                 },
                 onDelete = {
@@ -737,6 +839,7 @@ fun VaultScreen(
                     showBackupDialog = false
                     pendingBackupPassphrase = pass
                     val dateStr = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+                    onSystemPickerLaunched()
                     backupLauncher.launch("SmartAppLock_Vault_$dateStr.salvault")
                 }
             )
@@ -752,6 +855,7 @@ fun VaultScreen(
                 onConfirm = { pass ->
                     showRestoreDialog = false
                     pendingRestorePassphrase = pass
+                    onSystemPickerLaunched()
                     restorePickerLauncher.launch(arrayOf("*/*"))
                 }
             )
@@ -759,91 +863,388 @@ fun VaultScreen(
     }
 }
 
+/**
+ * Panel 6: "Importing Files" screen with circular gold progress ring and 4-step checklist.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EmptyVaultState(
-    category: VaultCategory,
-    onImportClick: () -> Unit
+private fun ImportingFilesScreen(
+    progressPercent: Int,
+    currentStepIndex: Int,
+    onCancel: () -> Unit
 ) {
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .size(84.dp)
-                .shadow(
-                    elevation = 8.dp,
-                    shape = CircleShape,
-                    spotColor = if (isDarkTheme) NeoPalette.ShadowDarkEdge else Color(0x330F172A)
-                )
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        if (isDarkTheme) {
-                            listOf(NeoPalette.SurfaceElevated, NeoPalette.SurfaceDark)
-                        } else {
-                            listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
-                        }
+    Scaffold(
+        containerColor = NeoPalette.BackgroundBase,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "Importing Files",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = NeoPalette.TextPrimary
                     )
-                )
-                .border(
-                    width = 1.5.dp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = when (category) {
-                    VaultCategory.PICTURE -> Icons.Default.PhotoLibrary
-                    VaultCategory.VIDEO -> Icons.Default.VideoLibrary
-                    VaultCategory.DOCUMENT -> Icons.Default.Description
                 },
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(40.dp)
+                navigationIcon = {
+                    IconButton(onClick = onCancel) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = NeoPalette.TextPrimary
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = NeoPalette.BackgroundBase
+                )
             )
         }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(modifier = Modifier.height(16.dp))
 
-        Spacer(modifier = Modifier.height(20.dp))
+                // Circular Gold Progress Ring matching Panel 6
+                Box(
+                    modifier = Modifier.size(180.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val strokeWidth = 10.dp.toPx()
+                        drawArc(
+                            color = Color(0xFF22222C),
+                            startAngle = 0f,
+                            sweepAngle = 360f,
+                            useCenter = false,
+                            style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                        )
+                        drawArc(
+                            brush = Brush.sweepGradient(
+                                listOf(
+                                    NeoPalette.SecondaryAmber,
+                                    NeoPalette.PrimaryGold,
+                                    NeoPalette.PrimaryGoldBright
+                                )
+                            ),
+                            startAngle = -90f,
+                            sweepAngle = (progressPercent.coerceIn(0, 100) / 100f) * 360f,
+                            useCenter = false,
+                            style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                        )
+                    }
 
-        Text(
-            text = when (category) {
-                VaultCategory.PICTURE -> "No Pictures Hidden"
-                VaultCategory.VIDEO -> "No Videos Hidden"
-                VaultCategory.DOCUMENT -> "No Documents Hidden"
-            },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = null,
+                            tint = NeoPalette.PrimaryGold,
+                            modifier = Modifier.size(38.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "${progressPercent.coerceIn(0, 100)}%",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = NeoPalette.TextPrimary
+                        )
+                    }
+                }
 
-        Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
-        Text(
-            text = "Files placed in the vault are encrypted with AES-256-GCM and completely invisible to gallery apps and file managers.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
+                Text(
+                    text = "Encrypting your files...",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Please keep the app open",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = NeoPalette.TextSecondary
+                )
 
-        Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
-        NeoButton(
-            text = "Import First File Now",
-            icon = Icons.Default.Add,
-            isPrimaryGlowing = true,
-            onClick = onImportClick,
-            shape = NeoShapes.SmallControl
-        )
+                // Checklist Card matching Panel 6
+                NeoCard(
+                    shape = NeoShapes.LargeCard,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val steps = listOf(
+                        "Reading files",
+                        "Encrypting with AES-256",
+                        "Saving to vault",
+                        "Finalizing"
+                    )
+                    steps.forEachIndexed { index, label ->
+                        val isCompleted = index <= currentStepIndex
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (isCompleted) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                                    contentDescription = null,
+                                    tint = if (isCompleted) NeoPalette.PrimaryGold else NeoPalette.TextSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (isCompleted) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (isCompleted) NeoPalette.TextPrimary else NeoPalette.TextSecondary
+                                )
+                            }
+                            if (index > 0) {
+                                Icon(
+                                    imageVector = Icons.Default.RadioButtonUnchecked,
+                                    contentDescription = null,
+                                    tint = if (index == currentStepIndex) NeoPalette.PrimaryGold else NeoPalette.TextSecondary.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            NeoButton(
+                text = "Cancel",
+                onClick = onCancel,
+                shape = NeoShapes.FullPill,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+/**
+ * Panel 7: "Import Successful!" screen with glowing gold folder badge, "View Files", and "Done".
+ */
+@Composable
+private fun ImportSuccessScreen(
+    importedCount: Int,
+    onViewFiles: () -> Unit,
+    onDone: () -> Unit
+) {
+    Scaffold(
+        containerColor = NeoPalette.BackgroundBase
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF281F07),
+                            NeoPalette.BackgroundBase
+                        )
+                    )
+                )
+                .padding(innerPadding)
+                .padding(horizontal = 28.dp, vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Glowing Circular Folder + Checkmark Badge matching Panel 7
+            Box(
+                modifier = Modifier
+                    .size(164.dp)
+                    .shadow(
+                        elevation = 16.dp,
+                        shape = CircleShape,
+                        ambientColor = NeoPalette.PrimaryGold,
+                        spotColor = NeoPalette.PrimaryGoldBright
+                    )
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFF362A0A),
+                                Color(0xFF151419)
+                            )
+                        )
+                    )
+                    .border(
+                        width = 1.5.dp,
+                        brush = Brush.verticalGradient(
+                            listOf(
+                                NeoPalette.PrimaryGoldBright,
+                                NeoPalette.PrimaryGold.copy(alpha = 0.25f)
+                            )
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(contentAlignment = Alignment.BottomEnd) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = "Vault Folder",
+                        tint = NeoPalette.PrimaryGold,
+                        modifier = Modifier.size(84.dp)
+                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = NeoPalette.PrimaryGoldBright,
+                        border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF151419)),
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = NeoPalette.TextInverse,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = NeoPalette.PrimaryGold, fontWeight = FontWeight.ExtraBold)) {
+                        append("Import ")
+                    }
+                    withStyle(SpanStyle(color = NeoPalette.TextPrimary, fontWeight = FontWeight.ExtraBold)) {
+                        append("Successful!")
+                    }
+                },
+                fontSize = 26.sp,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Your files ($importedCount) are now safely stored in the secure vault.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = NeoPalette.TextSecondary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            NeoButton(
+                text = "View Files",
+                onClick = onViewFiles,
+                isPrimaryGlowing = true,
+                shape = NeoShapes.FullPill,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("import_success_view_files_button")
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            NeoButton(
+                text = "Done",
+                onClick = onDone,
+                shape = NeoShapes.FullPill,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("import_success_done_button")
+            )
+        }
     }
 }
 
 @Composable
-private fun PictureVaultCard(
+private fun VaultGridTile(
+    item: VaultItem,
+    repository: VaultRepository,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    LaunchedEffect(item.id) {
+        if (item.category == VaultCategory.PICTURE) {
+            bitmap = repository.loadDecryptedBitmap(item)
+        }
+    }
+
+    val ext = item.originalFileName.substringAfterLast('.', "").uppercase(Locale.US).take(4).ifEmpty {
+        when (item.category) {
+            VaultCategory.PICTURE -> "IMG"
+            VaultCategory.VIDEO -> "VID"
+            VaultCategory.DOCUMENT -> "DOC"
+        }
+    }
+
+    val badgeColor = when (ext) {
+        "PDF" -> Color(0xFFDC2626)
+        "TXT" -> Color(0xFF2563EB)
+        "DOC", "DOCX" -> Color(0xFF4F46E5)
+        else -> NeoPalette.SecondaryAmber
+    }
+
+    NeoCard(
+        onClick = onClick,
+        shape = NeoShapes.MediumCard,
+        contentPadding = PaddingValues(6.dp),
+        modifier = modifier
+    ) {
+        if (item.category == VaultCategory.PICTURE && bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = item.originalFileName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(12.dp))
+            )
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(badgeColor),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = ext,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = ext,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NeoPalette.TextSecondary,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentVaultItemRow(
     item: VaultItem,
     repository: VaultRepository,
     onClick: () -> Unit
@@ -851,150 +1252,89 @@ private fun PictureVaultCard(
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(item.id) {
-        bitmap = repository.loadDecryptedBitmap(item)
+        if (item.category == VaultCategory.PICTURE) {
+            bitmap = repository.loadDecryptedBitmap(item)
+        }
+    }
+
+    val ext = item.originalFileName.substringAfterLast('.', "").uppercase(Locale.US).take(4).ifEmpty { "FILE" }
+    val badgeColor = when (ext) {
+        "PDF" -> Color(0xFFDC2626)
+        "TXT" -> Color(0xFF2563EB)
+        "DOC", "DOCX" -> Color(0xFF4F46E5)
+        else -> NeoPalette.SecondaryAmber
     }
 
     NeoCard(
         onClick = onClick,
         shape = NeoShapes.MediumCard,
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(0.85f)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            NeoInsetBox(
-                shape = NeoShapes.SmallControl,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap!!.asImageBitmap(),
-                            contentDescription = item.originalFileName,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Encrypted",
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = item.originalFileName,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Text(
-                text = formatFileSize(item.fileSizeRaw),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 11.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun FileVaultRow(
-    item: VaultItem,
-    onClick: () -> Unit,
-    onExport: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    NeoCard(
-        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                shape = CircleShape,
-                color = if (isDarkTheme) NeoPalette.SurfaceLight else MaterialTheme.colorScheme.surfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant
-                ),
-                modifier = Modifier.size(44.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = if (item.category == VaultCategory.VIDEO) Icons.Default.VideoLibrary else Icons.Default.Description,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp)
-                    )
+            if (item.category == VaultCategory.PICTURE && bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = item.originalFileName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(badgeColor),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (item.category == VaultCategory.VIDEO) {
+                        Icon(
+                            imageVector = Icons.Default.VideoLibrary,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    } else {
+                        Text(
+                            text = ext,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = item.originalFileName,
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = formatFileSize(item.fileSizeRaw),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(item.importedTimestamp)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            IconButton(onClick = onExport, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    imageVector = Icons.Default.FileDownload,
-                    contentDescription = "Export",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
+                val dateFormatted = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(item.importedTimestamp))
+                Text(
+                    text = "${formatFileSize(item.fileSizeRaw)} • $dateFormatted",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NeoPalette.TextSecondary
                 )
             }
 
-            IconButton(onClick = onDelete, modifier = Modifier.size(40.dp)) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete",
-                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Details",
+                tint = NeoPalette.TextSecondary
+            )
         }
     }
 }
@@ -1036,16 +1376,16 @@ private fun ItemDetailModal(
                 Text(
                     text = "Encrypted Vault Item",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary
                 )
                 IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Close")
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = NeoPalette.TextPrimary)
                 }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // In-Memory Decrypted Picture Preview
             if (item.category == VaultCategory.PICTURE) {
                 NeoInsetBox(
                     shape = NeoShapes.MediumCard,
@@ -1059,7 +1399,7 @@ private fun ItemDetailModal(
                         contentAlignment = Alignment.Center
                     ) {
                         if (isLoadingBitmap) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            CircularProgressIndicator(color = NeoPalette.PrimaryGold)
                         } else if (bitmap != null) {
                             Image(
                                 bitmap = bitmap!!.asImageBitmap(),
@@ -1070,7 +1410,7 @@ private fun ItemDetailModal(
                         } else {
                             Text(
                                 text = "Preview unavailable",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = NeoPalette.TextSecondary
                             )
                         }
                     }
@@ -1078,7 +1418,6 @@ private fun ItemDetailModal(
                 Spacer(modifier = Modifier.height(14.dp))
             }
 
-            // Metadata Rows inside NeoInsetBox
             NeoInsetBox(
                 shape = NeoShapes.SmallControl,
                 contentPadding = PaddingValues(12.dp),
@@ -1103,10 +1442,11 @@ private fun ItemDetailModal(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 NeoButton(
-                    text = "Export to Storage",
+                    text = "Export",
                     icon = Icons.Default.FileDownload,
+                    isPrimaryGlowing = true,
                     onClick = onExport,
-                    shape = NeoShapes.SmallControl,
+                    shape = NeoShapes.FullPill,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -1115,7 +1455,7 @@ private fun ItemDetailModal(
                     icon = Icons.Default.Delete,
                     isDestructive = true,
                     onClick = onDelete,
-                    shape = NeoShapes.SmallControl,
+                    shape = NeoShapes.FullPill,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -1131,12 +1471,13 @@ private fun DetailRow(label: String, value: String) {
             .padding(vertical = 3.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = NeoPalette.TextSecondary)
         Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium,
+            color = NeoPalette.TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1158,10 +1499,11 @@ private fun BackupPassphraseDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title, fontWeight = FontWeight.Bold) },
+        containerColor = NeoPalette.SurfaceDark,
+        title = { Text(title, fontWeight = FontWeight.Bold, color = NeoPalette.TextPrimary) },
         text = {
             Column {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = NeoPalette.TextSecondary)
                 Spacer(modifier = Modifier.height(14.dp))
                 OutlinedTextField(
                     value = passphrase,
@@ -1184,7 +1526,7 @@ private fun BackupPassphraseDialog(
                 }
                 if (errorMsg != null) {
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(errorMsg ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    Text(errorMsg ?: "", style = MaterialTheme.typography.bodySmall, color = NeoPalette.ErrorRed)
                 }
             }
         },
@@ -1192,7 +1534,7 @@ private fun BackupPassphraseDialog(
             NeoButton(
                 text = confirmLabel,
                 isPrimaryGlowing = true,
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = {
                     if (passphrase.length < 4) {
                         errorMsg = "Passphrase must be at least 4 characters"
@@ -1209,7 +1551,7 @@ private fun BackupPassphraseDialog(
         dismissButton = {
             NeoButton(
                 text = "Cancel",
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = onDismiss
             )
         }

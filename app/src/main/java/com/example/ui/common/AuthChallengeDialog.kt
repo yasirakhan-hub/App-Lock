@@ -1,22 +1,17 @@
 package com.example.ui.common
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,8 +35,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Centralized, reusable authentication dialog providing BiometricPrompt with PIN fallback.
- * Strictly action-scoped: authorizes only the specific invoking action and never leaks
- * authorization across unrelated sensitive flows.
+ * Styled in Black & Gold Neomorphism.
  */
 @Composable
 fun AuthChallengeDialog(
@@ -87,7 +81,6 @@ fun AuthChallengeDialog(
         }
     }
 
-    // Automatically trigger biometric on first appearance if available and not locked out
     LaunchedEffect(Unit) {
         if (isBiometricEnabled && lockoutSeconds == 0) {
             delay(250L)
@@ -95,7 +88,6 @@ fun AuthChallengeDialog(
         }
     }
 
-    // Cooldown countdown
     LaunchedEffect(lockoutSeconds) {
         if (lockoutSeconds > 0) {
             delay(1000L)
@@ -105,19 +97,16 @@ fun AuthChallengeDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = NeoPalette.SurfaceDark,
         icon = {
-            Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
-            )
+            NeoGoldPadlockEmblem(badgeSize = 56.dp, isOpenShackle = false)
         },
         title = {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
+                color = NeoPalette.TextPrimary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -131,7 +120,7 @@ fun AuthChallengeDialog(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = NeoPalette.TextSecondary,
                     textAlign = TextAlign.Center
                 )
 
@@ -148,7 +137,7 @@ fun AuthChallengeDialog(
                     Text(
                         text = errorMsg ?: "",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = NeoPalette.ErrorRed,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -156,6 +145,7 @@ fun AuthChallengeDialog(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 PinKeypad(
+                    buttonSize = 62.dp,
                     onDigitClick = { digit ->
                         if (lockoutSeconds > 0) return@PinKeypad
                         if (enteredPin.length < pinLength) {
@@ -198,13 +188,14 @@ fun AuthChallengeDialog(
                         if (isBiometricEnabled) {
                             NeoCircularButton(
                                 onClick = { triggerBiometric() },
-                                size = 56.dp,
+                                size = 58.dp,
+                                isGoldSolid = true,
                                 modifier = Modifier.testTag("auth_challenge_biometric_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Fingerprint,
                                     contentDescription = "Authenticate with Fingerprint",
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = NeoPalette.TextInverse,
                                     modifier = Modifier.size(28.dp)
                                 )
                             }
@@ -217,7 +208,7 @@ fun AuthChallengeDialog(
         dismissButton = {
             NeoButton(
                 text = "Cancel",
-                shape = NeoShapes.SmallControl,
+                shape = NeoShapes.FullPill,
                 onClick = onDismiss,
                 modifier = Modifier.testTag("auth_challenge_cancel_button")
             )

@@ -5,15 +5,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,22 +23,25 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Reusable PIN Indicator dots showing how many digits have been entered.
+ * Reusable PIN Indicator dots matching Panel 2 & Panel 10 of the reference design:
+ * Filled dots glow with warm gold; empty dots are recessed dark circles.
  */
 @Composable
 fun PinDots(
@@ -57,37 +57,50 @@ fun PinDots(
     ) {
         repeat(pinLength) { index ->
             val isFilled = index < enteredLength
-            val dotColor = when {
-                isError -> MaterialTheme.colorScheme.error
-                isFilled -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.surfaceVariant
+            val dotBrush = when {
+                isError -> Brush.radialGradient(
+                    listOf(NeoPalette.ErrorRed, NeoPalette.ErrorRed.copy(alpha = 0.8f))
+                )
+                isFilled -> Brush.radialGradient(
+                    listOf(NeoPalette.PrimaryGoldBright, NeoPalette.PrimaryGold, NeoPalette.SecondaryAmber)
+                )
+                else -> Brush.verticalGradient(
+                    listOf(Color(0xFF0A0A0E), Color(0xFF1A1A22))
+                )
             }
             val borderColor = when {
-                isError -> MaterialTheme.colorScheme.error
-                isFilled -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                isError -> NeoPalette.ErrorRed
+                isFilled -> Color(0xCCFFE066)
+                else -> Color(0x38FFFFFF)
             }
 
             Box(
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
-                    .size(18.dp)
+                    .size(16.dp)
+                    .shadow(
+                        elevation = if (isFilled) 6.dp else 1.dp,
+                        shape = CircleShape,
+                        ambientColor = if (isFilled) NeoPalette.PrimaryGold else Color.Black,
+                        spotColor = if (isFilled) NeoPalette.PrimaryGoldBright else Color.Black
+                    )
                     .clip(CircleShape)
-                    .background(dotColor)
-                    .border(2.dp, borderColor, CircleShape)
+                    .background(dotBrush)
+                    .border(1.5.dp, borderColor, CircleShape)
             )
         }
     }
 }
 
 /**
- * Clean, tactile 3x4 numeric keypad for PIN entry.
+ * Clean, tactile 3x4 circular Neomorphic numeric keypad for PIN entry (matching Panel 2 & Panel 10).
  */
 @Composable
 fun PinKeypad(
     onDigitClick: (String) -> Unit,
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier,
+    buttonSize: Dp = 70.dp,
     lockoutSeconds: Int = 0,
     extraLeftAction: @Composable (() -> Unit)? = null
 ) {
@@ -97,9 +110,9 @@ fun PinKeypad(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         AnimatedVisibility(
             visible = isLockedOut,
@@ -107,11 +120,12 @@ fun PinKeypad(
             exit = fadeOut()
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.errorContainer,
-                shape = RoundedCornerShape(12.dp),
+                color = NeoPalette.ErrorRed.copy(alpha = 0.16f),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, NeoPalette.ErrorRed.copy(alpha = 0.5f)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp)
+                    .padding(bottom = 6.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
@@ -121,14 +135,14 @@ fun PinKeypad(
                     Icon(
                         imageVector = Icons.Default.LockClock,
                         contentDescription = "Lockout",
-                        tint = MaterialTheme.colorScheme.onErrorContainer
+                        tint = NeoPalette.ErrorRed
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "Too many attempts. Try again in ${lockoutSeconds}s",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = NeoPalette.TextPrimary,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -149,6 +163,7 @@ fun PinKeypad(
                 for (digit in row) {
                     KeypadButton(
                         text = digit,
+                        size = buttonSize,
                         enabled = !isLockedOut,
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -160,14 +175,14 @@ fun PinKeypad(
             }
         }
 
-        // Bottom row: extra action (or empty), 0, backspace
+        // Bottom row: extra action (glowing gold fingerprint button or recovery), 0, backspace
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
-                modifier = Modifier.size(72.dp),
+                modifier = Modifier.size(buttonSize),
                 contentAlignment = Alignment.Center
             ) {
                 extraLeftAction?.invoke()
@@ -175,6 +190,7 @@ fun PinKeypad(
 
             KeypadButton(
                 text = "0",
+                size = buttonSize,
                 enabled = !isLockedOut,
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -186,16 +202,16 @@ fun PinKeypad(
             NeoCircularButton(
                 onClick = onDeleteClick,
                 enabled = !isLockedOut,
-                size = 72.dp,
-                backgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                size = buttonSize,
+                backgroundColor = NeoPalette.SurfaceElevated,
                 modifier = Modifier.testTag("pin_delete_button")
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Backspace,
                     contentDescription = "Delete",
-                    tint = if (isLockedOut) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                    else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(28.dp)
+                    tint = if (isLockedOut) NeoPalette.TextSecondary.copy(alpha = 0.35f)
+                    else NeoPalette.TextPrimary,
+                    modifier = Modifier.size(24.dp)
                 )
             }
         }
@@ -205,6 +221,7 @@ fun PinKeypad(
 @Composable
 private fun KeypadButton(
     text: String,
+    size: Dp,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -212,15 +229,16 @@ private fun KeypadButton(
     NeoCircularButton(
         onClick = onClick,
         enabled = enabled,
-        size = 72.dp,
-        backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+        size = size,
+        backgroundColor = NeoPalette.SurfaceElevated,
+        contentColor = NeoPalette.TextPrimary,
         modifier = modifier
     ) {
         Text(
             text = text,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (enabled) NeoPalette.TextPrimary else NeoPalette.TextSecondary.copy(alpha = 0.4f),
             textAlign = TextAlign.Center
         )
     }

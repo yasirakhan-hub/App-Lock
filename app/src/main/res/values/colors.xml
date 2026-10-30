@@ -8,8 +8,8 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- AppLock Branding Dark Navy & Electric Blue Colors -->
-    <color name="applock_dark_bg">#0A0F1D</color>
-    <color name="applock_electric_blue">#00E5FF</color>
-    <color name="applock_deep_blue">#0077B6</color>
+    <!-- AppLock Branding Premium Black & Gold Colors -->
+    <color name="applock_dark_bg">#0B0B0E</color>
+    <color name="applock_electric_blue">#F5B800</color>
+    <color name="applock_deep_blue">#D97706</color>
 </resources>

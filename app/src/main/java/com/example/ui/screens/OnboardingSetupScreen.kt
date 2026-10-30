@@ -4,18 +4,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
-import com.example.ui.common.NeoButton
-import com.example.ui.common.NeoCard
-import com.example.ui.common.NeoInsetBox
-import com.example.ui.common.NeoPalette
-import com.example.ui.common.NeoShapes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,28 +19,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -60,16 +42,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
 import com.example.data.security.AppLockPreferences
+import com.example.ui.common.NeoBrandTitle
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoGoldPadlockEmblem
+import com.example.ui.common.NeoIconBadge
+import com.example.ui.common.NeoInsetBox
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
 import com.example.util.BiometricHelper
@@ -96,7 +85,6 @@ fun OnboardingSetupScreen(
     var confirmPin by remember { mutableStateOf("") }
     var pinMismatchError by remember { mutableStateOf(false) }
 
-    // Security question state
     val defaultQuestions = listOf(
         "What was the name of your first pet?",
         "What city were you born in?",
@@ -109,10 +97,22 @@ fun OnboardingSetupScreen(
     var customAnswer by remember { mutableStateOf("") }
     var answerError by remember { mutableStateOf<String?>(null) }
 
-    Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
+    Scaffold(
+        containerColor = NeoPalette.BackgroundBase,
+        modifier = modifier.fillMaxSize()
+    ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF1A1405),
+                            NeoPalette.BackgroundBase,
+                            Color(0xFF120F06)
+                        )
+                    )
+                )
                 .padding(innerPadding)
         ) {
             AnimatedContent(
@@ -136,35 +136,26 @@ fun OnboardingSetupScreen(
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                    modifier = Modifier.size(56.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Default.Key,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
-                                }
+                                NeoGoldPadlockEmblem(
+                                    badgeSize = 76.dp,
+                                    isOpenShackle = true
+                                )
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
                                 Text(
                                     text = "Create Master PIN",
                                     style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeoPalette.TextPrimary
                                 )
 
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
 
                                 Text(
-                                    text = "Choose a $selectedPinLength-digit PIN to lock and unlock your applications.",
+                                    text = "Choose a $selectedPinLength-digit PIN to unlock your secure space",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = NeoPalette.TextSecondary,
                                     textAlign = TextAlign.Center
                                 )
 
@@ -172,7 +163,7 @@ fun OnboardingSetupScreen(
 
                                 // Neomorphic PIN Length Selector
                                 NeoInsetBox(
-                                    shape = NeoShapes.MediumCard,
+                                    shape = NeoShapes.FullPill,
                                     contentPadding = PaddingValues(6.dp),
                                     modifier = Modifier
                                         .fillMaxWidth(0.75f)
@@ -190,7 +181,7 @@ fun OnboardingSetupScreen(
                                                     firstPin = ""
                                                 },
                                                 isPrimaryGlowing = isSelected,
-                                                shape = NeoShapes.SmallControl,
+                                                shape = NeoShapes.FullPill,
                                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                                                 modifier = Modifier.weight(1f)
                                             ) {
@@ -198,7 +189,7 @@ fun OnboardingSetupScreen(
                                                     text = label,
                                                     fontSize = 13.sp,
                                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                    color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
+                                                    color = if (isSelected) NeoPalette.TextInverse else NeoPalette.TextPrimary
                                                 )
                                             }
                                         }
@@ -242,27 +233,20 @@ fun OnboardingSetupScreen(
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.secondaryContainer,
-                                    modifier = Modifier.size(56.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.secondary,
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
-                                }
+                                NeoIconBadge(
+                                    icon = Icons.Default.Check,
+                                    size = 72.dp,
+                                    iconSize = 34.dp,
+                                    isGlowing = true
+                                )
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
                                 Text(
                                     text = "Confirm Your PIN",
                                     style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeoPalette.TextPrimary
                                 )
 
                                 Spacer(modifier = Modifier.height(8.dp))
@@ -270,7 +254,7 @@ fun OnboardingSetupScreen(
                                 Text(
                                     text = "Re-enter your $selectedPinLength-digit PIN to ensure it was typed correctly.",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = NeoPalette.TextSecondary,
                                     textAlign = TextAlign.Center
                                 )
 
@@ -287,7 +271,7 @@ fun OnboardingSetupScreen(
                                     Text(
                                         text = "PINs do not match. Please try again.",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
+                                        color = NeoPalette.ErrorRed,
                                         fontWeight = FontWeight.Medium
                                     )
                                 }
@@ -302,7 +286,6 @@ fun OnboardingSetupScreen(
 
                                         if (newPin.length == selectedPinLength) {
                                             if (newPin == firstPin) {
-                                                // Advance to recovery question step
                                                 currentStep = SetupStep.SECURITY_QUESTION
                                             } else {
                                                 pinMismatchError = true
@@ -320,7 +303,7 @@ fun OnboardingSetupScreen(
                                 extraLeftAction = {
                                     NeoButton(
                                         text = "Back",
-                                        shape = NeoShapes.SmallControl,
+                                        shape = NeoShapes.FullPill,
                                         onClick = {
                                             firstPin = ""
                                             confirmPin = ""
@@ -342,27 +325,20 @@ fun OnboardingSetupScreen(
                                 .verticalScroll(rememberScrollState()),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                modifier = Modifier.size(56.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.Security,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                            }
+                            NeoIconBadge(
+                                icon = Icons.Default.Security,
+                                size = 72.dp,
+                                iconSize = 34.dp,
+                                isGlowing = true
+                            )
 
                             Spacer(modifier = Modifier.height(16.dp))
 
                             Text(
                                 text = "PIN Recovery Setup",
                                 style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = NeoPalette.TextPrimary
                             )
 
                             Spacer(modifier = Modifier.height(8.dp))
@@ -370,13 +346,12 @@ fun OnboardingSetupScreen(
                             Text(
                                 text = "Set a security question so you can securely unlock or reset your PIN if forgotten, without storing plain text passwords.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = NeoPalette.TextSecondary,
                                 textAlign = TextAlign.Center
                             )
 
                             Spacer(modifier = Modifier.height(24.dp))
 
-                            // Dropdown for question
                             ExposedDropdownMenuBox(
                                 expanded = isQuestionDropdownExpanded,
                                 onExpandedChange = { isQuestionDropdownExpanded = it },
@@ -422,7 +397,7 @@ fun OnboardingSetupScreen(
                                 isError = answerError != null,
                                 supportingText = {
                                     if (answerError != null) {
-                                        Text(answerError ?: "", color = MaterialTheme.colorScheme.error)
+                                        Text(answerError ?: "", color = NeoPalette.ErrorRed)
                                     } else {
                                         Text("Answers are case-insensitive and stored as a cryptographic hash.")
                                     }
@@ -437,13 +412,13 @@ fun OnboardingSetupScreen(
                             NeoButton(
                                 text = "Continue",
                                 isPrimaryGlowing = true,
+                                shape = NeoShapes.FullPill,
                                 onClick = {
                                     if (customAnswer.trim().length < 2) {
                                         answerError = "Please enter an answer with at least 2 characters."
                                         return@NeoButton
                                     }
 
-                                    // Save PIN and recovery question
                                     preferences.savePin(firstPin)
                                     preferences.saveRecoveryQuestion(selectedQuestion, customAnswer)
                                     preferences.setProtectionEnabled(true)
@@ -478,11 +453,14 @@ fun OnboardingSetupScreen(
     }
 }
 
+/**
+ * Panel 1: Splash / Welcome screen with large golden open-shackle padlock badge,
+ * "Smart AppLock" two-tone title, and "Your Privacy / Our Priority" subtitle.
+ */
 @Composable
 private fun WelcomeStep(
     onGetStarted: () -> Unit
 ) {
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -492,57 +470,31 @@ private fun WelcomeStep(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            Box(
-                modifier = Modifier
-                    .size(96.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            colors = if (isDarkTheme) {
-                                listOf(NeoPalette.SurfaceLight, NeoPalette.SurfaceDark)
-                            } else {
-                                listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
-                            }
-                        )
-                    )
-                    .border(
-                        1.5.dp,
-                        if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant,
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_applock_shield_logo),
-                    contentDescription = "Shield",
-                    modifier = Modifier.size(60.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Text(
-                text = "Welcome to Smart AppLock",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
+            NeoGoldPadlockEmblem(
+                badgeSize = 148.dp,
+                isOpenShackle = true
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(28.dp))
+
+            NeoBrandTitle(fontSize = 30.sp)
+
+            Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Private, native protection for your sensitive apps and personal data on Android.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
+                text = "Your Privacy\nOur Priority",
+                style = MaterialTheme.typography.titleMedium,
+                color = NeoPalette.TextSecondary,
+                textAlign = TextAlign.Center,
+                lineHeight = 24.sp
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // Feature Highlights (NeoCard owns internal 16.dp padding)
             NeoCard(
+                shape = NeoShapes.LargeCard,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -552,13 +504,13 @@ private fun WelcomeStep(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     FeatureRow(
-                        title = "100% Offline & Private",
-                        description = "No internet required. No tracking, ads, or plain text password storage."
+                        title = "AES-256-GCM File Vault",
+                        description = "Encrypts private photos, videos, and documents inside hardware-backed storage."
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     FeatureRow(
                         title = "Salted Cryptographic Hashing",
-                        description = "PINs are protected using PBKDF2-HMAC-SHA256 with rate-limited brute-force defense."
+                        description = "PINs are protected using salted SHA-256 with rate-limited brute-force defense."
                     )
                 }
             }
@@ -570,6 +522,7 @@ private fun WelcomeStep(
             text = "Set Up AppLock Now",
             onClick = onGetStarted,
             isPrimaryGlowing = true,
+            shape = NeoShapes.FullPill,
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("get_started_button")
@@ -585,10 +538,10 @@ private fun FeatureRow(
     Row(verticalAlignment = Alignment.Top) {
         Box(
             modifier = Modifier
-                .padding(top = 2.dp)
+                .padding(top = 6.dp)
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary)
+                .background(NeoPalette.PrimaryGold)
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column {
@@ -596,12 +549,12 @@ private fun FeatureRow(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = NeoPalette.TextPrimary
             )
             Text(
                 text = description,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = NeoPalette.TextSecondary
             )
         }
     }
@@ -612,7 +565,6 @@ private fun BiometricSetupStep(
     onEnable: () -> Unit,
     onSkip: () -> Unit
 ) {
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -624,33 +576,12 @@ private fun BiometricSetupStep(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.height(36.dp))
 
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            colors = if (isDarkTheme) {
-                                listOf(NeoPalette.SurfaceLight, NeoPalette.SurfaceDark)
-                            } else {
-                                listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
-                            }
-                        )
-                    )
-                    .border(
-                        1.5.dp,
-                        if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant,
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Fingerprint,
-                    contentDescription = "Fingerprint",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(44.dp)
-                )
-            }
+            NeoIconBadge(
+                icon = Icons.Default.Fingerprint,
+                size = 88.dp,
+                iconSize = 46.dp,
+                isGlowing = true
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -658,21 +589,23 @@ private fun BiometricSetupStep(
                 text = "Enable Fingerprint Unlock?",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
+                color = NeoPalette.TextPrimary,
                 textAlign = TextAlign.Center
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "Your device supports biometric authentication. Enable fingerprint unlock to open protected apps and authorize sensitive settings instantly without typing your PIN every time.",
+                text = "Your device supports biometric authentication. Enable fingerprint unlock to open protected apps and your encrypted file vault instantly.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = NeoPalette.TextSecondary,
                 textAlign = TextAlign.Center
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
             NeoCard(
+                shape = NeoShapes.LargeCard,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -688,7 +621,7 @@ private fun BiometricSetupStep(
                     Spacer(modifier = Modifier.height(12.dp))
                     FeatureRow(
                         title = "Private & Local",
-                        description = "Biometrics are processed strictly by Android OS hardware. No templates are ever stored."
+                        description = "Biometrics are processed strictly by Android OS hardware."
                     )
                 }
             }
@@ -704,6 +637,7 @@ private fun BiometricSetupStep(
                 text = "Enable Fingerprint Unlock",
                 onClick = onEnable,
                 isPrimaryGlowing = true,
+                shape = NeoShapes.FullPill,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("enable_biometrics_button")
@@ -714,6 +648,7 @@ private fun BiometricSetupStep(
             NeoButton(
                 text = "Skip & Use PIN Only",
                 onClick = onSkip,
+                shape = NeoShapes.FullPill,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("skip_biometrics_button")
@@ -721,4 +656,3 @@ private fun BiometricSetupStep(
         }
     }
 }
-

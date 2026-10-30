@@ -10,38 +10,23 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
-import com.example.ui.common.NeoButton
-import com.example.ui.common.NeoCircularButton
-import com.example.ui.common.NeoInsetBox
-import com.example.ui.common.NeoPalette
-import com.example.ui.common.NeoShapes
-import com.example.ui.common.NeoStatusBadge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -55,17 +40,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
-import com.example.R
 import com.example.data.repository.AppDiscoveryRepository
 import com.example.data.repository.AppLockManager
+import com.example.ui.common.NeoButton
+import com.example.ui.common.NeoCircularButton
+import com.example.ui.common.NeoGoldPadlockEmblem
+import com.example.ui.common.NeoInsetBox
+import com.example.ui.common.NeoPalette
+import com.example.ui.common.NeoShapes
+import com.example.ui.common.NeoStatusBadge
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
 import com.example.ui.theme.AppLockTheme
@@ -75,7 +66,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Fullscreen lock screen activity displayed over protected applications.
- * Supports both numeric PIN authentication and BiometricPrompt (Fingerprint) unlock.
+ * Styled in Black & Gold Neomorphism matching Panel 2 & Panel 10.
  */
 class LockActivity : FragmentActivity() {
 
@@ -117,11 +108,10 @@ class LockActivity : FragmentActivity() {
         } else null
 
         setContent {
-            AppLockTheme {
+            AppLockTheme(darkTheme = true) {
                 LockScreen(
                     targetAppName = appName,
                     targetAppIcon = appIcon,
-                    targetPackage = targetPackage,
                     isTestMode = isTestMode,
                     onUnlockSuccess = {
                         if (!isTestMode && targetPackage.isNotBlank()) {
@@ -143,9 +133,6 @@ class LockActivity : FragmentActivity() {
         super.onDestroy()
     }
 
-    /**
-     * Prevents bypassing the lock: when user presses Back, redirect to Android Home screen.
-     */
     private fun exitToHomeScreen() {
         val homeIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_HOME)
@@ -159,7 +146,6 @@ class LockActivity : FragmentActivity() {
     private fun LockScreen(
         targetAppName: String,
         targetAppIcon: ImageBitmap?,
-        targetPackage: String,
         isTestMode: Boolean,
         onUnlockSuccess: () -> Unit,
         onSafeExit: () -> Unit
@@ -183,7 +169,6 @@ class LockActivity : FragmentActivity() {
         }
         val isBiometricEnabled = prefs.isBiometricEnabled() && isBiometricSupported
 
-        // Function to launch BiometricPrompt
         fun triggerBiometricPrompt() {
             if (isBiometricEnabled && lockoutSeconds == 0) {
                 BiometricHelper.showBiometricPrompt(
@@ -205,7 +190,6 @@ class LockActivity : FragmentActivity() {
             }
         }
 
-        // Automatically trigger BiometricPrompt on screen appearance if enabled
         LaunchedEffect(Unit) {
             if (isBiometricEnabled && lockoutSeconds == 0) {
                 delay(300L)
@@ -213,7 +197,6 @@ class LockActivity : FragmentActivity() {
             }
         }
 
-        // Cooldown timer ticker
         LaunchedEffect(lockoutSeconds) {
             if (lockoutSeconds > 0) {
                 delay(1000L)
@@ -223,87 +206,82 @@ class LockActivity : FragmentActivity() {
 
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            containerColor = MaterialTheme.colorScheme.background
+            containerColor = NeoPalette.BackgroundBase
         ) { innerPadding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF171306),
+                                NeoPalette.BackgroundBase
+                            )
+                        )
+                    )
                     .padding(innerPadding)
                     .padding(vertical = 16.dp, horizontal = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Top Header: App Identity & Lock Badge
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-
                     if (isTestMode) {
                         NeoStatusBadge(
-                            text = "SIMULATION TEST MODE",
-                            color = NeoPalette.PrimaryCyan,
+                            text = "This is a simulated lock screen",
+                            color = NeoPalette.PrimaryGold,
                             modifier = Modifier.padding(bottom = 10.dp)
                         )
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.radialGradient(
-                                    colors = if (isDarkTheme) {
-                                        listOf(NeoPalette.SurfaceLight, NeoPalette.SurfaceDark)
-                                    } else {
-                                        listOf(Color.White, MaterialTheme.colorScheme.surfaceVariant)
-                                    }
+                    if (targetAppIcon != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(82.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.radialGradient(
+                                        colors = listOf(Color(0xFF2D2309), Color(0xFF141316))
+                                    )
                                 )
-                            )
-                            .border(
-                                1.5.dp,
-                                if (isDarkTheme) NeoPalette.SpecularBorder else MaterialTheme.colorScheme.outlineVariant,
-                                CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (targetAppIcon != null) {
+                                .border(1.5.dp, NeoPalette.PrimaryGold.copy(alpha = 0.65f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Image(
                                 bitmap = targetAppIcon,
                                 contentDescription = targetAppName,
-                                modifier = Modifier.size(52.dp)
-                            )
-                        } else {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_applock_shield_logo),
-                                contentDescription = "Locked",
-                                modifier = Modifier.size(44.dp)
+                                modifier = Modifier.size(50.dp)
                             )
                         }
+                    } else {
+                        NeoGoldPadlockEmblem(
+                            badgeSize = 82.dp,
+                            isOpenShackle = false
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
-                        text = targetAppName,
-                        style = MaterialTheme.typography.titleLarge,
+                        text = "Enter PIN",
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = NeoPalette.TextPrimary,
                         textAlign = TextAlign.Center
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = if (isBiometricEnabled) "Use fingerprint or enter PIN" else "Enter PIN to access",
+                        text = targetAppName,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NeoPalette.TextSecondary
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // PIN Dots
                     PinDots(
                         pinLength = pinLength,
                         enteredLength = enteredPin.length,
@@ -316,14 +294,13 @@ class LockActivity : FragmentActivity() {
                         Text(
                             text = errorMessage ?: "",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
+                            color = NeoPalette.ErrorRed,
                             fontWeight = FontWeight.Medium,
                             textAlign = TextAlign.Center
                         )
                     }
                 }
 
-                // Center/Bottom Keypad
                 PinKeypad(
                     onDigitClick = { digit ->
                         if (lockoutSeconds > 0) return@PinKeypad
@@ -366,29 +343,29 @@ class LockActivity : FragmentActivity() {
                     lockoutSeconds = lockoutSeconds,
                     extraLeftAction = {
                         if (isBiometricEnabled) {
-                            // Fingerprint button to re-trigger BiometricPrompt
                             NeoCircularButton(
                                 onClick = { triggerBiometricPrompt() },
-                                size = 60.dp,
+                                size = 70.dp,
+                                isGoldSolid = true,
                                 modifier = Modifier.testTag("biometric_trigger_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Fingerprint,
                                     contentDescription = "Unlock with Fingerprint",
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = NeoPalette.TextInverse,
                                     modifier = Modifier.size(32.dp)
                                 )
                             }
                         } else if (prefs.hasRecoveryQuestion()) {
                             NeoCircularButton(
                                 onClick = { showRecoveryDialog = true },
-                                size = 60.dp,
+                                size = 70.dp,
                                 modifier = Modifier.testTag("forgot_pin_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.HelpOutline,
                                     contentDescription = "Forgot PIN",
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = NeoPalette.PrimaryGold,
                                     modifier = Modifier.size(28.dp)
                                 )
                             }
@@ -396,7 +373,6 @@ class LockActivity : FragmentActivity() {
                     }
                 )
 
-                // Bottom Actions: Forgot PIN link & Cancel
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (isBiometricEnabled && prefs.hasRecoveryQuestion()) {
                         TextButton(
@@ -406,7 +382,7 @@ class LockActivity : FragmentActivity() {
                             Text(
                                 text = "Forgot PIN?",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
+                                color = NeoPalette.PrimaryGold
                             )
                         }
                     }
@@ -418,13 +394,12 @@ class LockActivity : FragmentActivity() {
                         Text(
                             text = "Cancel & Return to Home",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NeoPalette.TextSecondary
                         )
                     }
                 }
             }
 
-            // Recovery Dialog
             if (showRecoveryDialog) {
                 RecoveryDialog(
                     securityQuestion = prefs.getSecurityQuestion() ?: "Security Question",
@@ -454,11 +429,13 @@ class LockActivity : FragmentActivity() {
 
         AlertDialog(
             onDismissRequest = onDismiss,
+            containerColor = NeoPalette.SurfaceDark,
             title = {
                 Text(
                     text = "Forgot PIN?",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary
                 )
             },
             text = {
@@ -466,7 +443,7 @@ class LockActivity : FragmentActivity() {
                     Text(
                         text = "Answer your security question to unlock without revealing your existing PIN.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NeoPalette.TextSecondary
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     NeoInsetBox(
@@ -477,7 +454,7 @@ class LockActivity : FragmentActivity() {
                             text = securityQuestion,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = NeoPalette.TextPrimary
                         )
                     }
                     Spacer(modifier = Modifier.height(12.dp))
@@ -499,7 +476,7 @@ class LockActivity : FragmentActivity() {
                         Text(
                             text = error ?: "",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
+                            color = NeoPalette.ErrorRed
                         )
                     }
                 }
@@ -508,11 +485,9 @@ class LockActivity : FragmentActivity() {
                 NeoButton(
                     text = "Unlock",
                     isPrimaryGlowing = true,
-                    shape = NeoShapes.SmallControl,
+                    shape = NeoShapes.FullPill,
                     onClick = {
-                        if (onVerifyAnswer(answerText)) {
-                            // Verified
-                        } else {
+                        if (!onVerifyAnswer(answerText)) {
                             error = "Incorrect answer. Please check spelling."
                         }
                     },
@@ -522,7 +497,7 @@ class LockActivity : FragmentActivity() {
             dismissButton = {
                 NeoButton(
                     text = "Cancel",
-                    shape = NeoShapes.SmallControl,
+                    shape = NeoShapes.FullPill,
                     onClick = onDismiss
                 )
             }
