@@ -63,18 +63,31 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Dialpad
+import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Password
+import androidx.compose.material.icons.filled.Pin
+import androidx.compose.ui.text.style.TextAlign
+import androidx.fragment.app.FragmentActivity
 import com.example.data.security.AppLockPreferences
+import com.example.data.security.AppLockPreferences.AuthMethod
 import com.example.ui.common.AuthChallengeDialog
+import com.example.ui.common.BiometricActionRow
 import com.example.ui.common.MainBottomTab
 import com.example.ui.common.NeoBottomNavigationBar
 import com.example.ui.common.NeoButton
 import com.example.ui.common.NeoCard
+import com.example.ui.common.NeoCircularButton
 import com.example.ui.common.NeoIconBadge
 import com.example.ui.common.NeoPalette
 import com.example.ui.common.NeoShapes
 import com.example.ui.common.NeoStatusBadge
+import com.example.ui.common.PasswordAuthInput
+import com.example.ui.common.PatternLockGrid
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
+import com.example.util.BiometricHelper
 import com.example.util.DeviceAdminHelper
 import com.example.util.PermissionHelper
 
@@ -97,6 +110,7 @@ fun SettingsScreen(
     var isBiometricEnabled by remember { mutableStateOf(preferences.isBiometricEnabled()) }
     var isCalcSecretConfigured by remember { mutableStateOf(preferences.isCalculatorSecretConfigured()) }
     var isCalcDisguiseEnabled by remember { mutableStateOf(preferences.isCalculatorDisguiseEnabled()) }
+    var activeAuthMethod by remember { mutableStateOf(preferences.getAuthMethod()) }
 
     var showChangePinDialog by remember { mutableStateOf(false) }
     var showChangeQuestionDialog by remember { mutableStateOf(false) }
@@ -105,7 +119,6 @@ fun SettingsScreen(
     var showConfigureCalcSecretDialog by remember { mutableStateOf(false) }
     var enableDisguiseAfterSecretSetup by remember { mutableStateOf(false) }
 
-    var showAuthForChangePin by remember { mutableStateOf(false) }
     var showAuthForChangeQuestion by remember { mutableStateOf(false) }
     var showAuthForDeactivateAdmin by remember { mutableStateOf(false) }
     var showAuthForReset by remember { mutableStateOf(false) }
@@ -117,6 +130,7 @@ fun SettingsScreen(
         isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
         isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
         isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+        activeAuthMethod = preferences.getAuthMethod()
     }
 
     Scaffold(
@@ -171,9 +185,10 @@ fun SettingsScreen(
             // 1. Change PIN (matching Panel 9)
             SettingsRow(
                 title = "Change PIN",
-                subtitle = "Update your security PIN",
+                subtitle = "Current: ${activeAuthMethod.displayName} • Tap to change",
                 icon = Icons.Default.Person,
-                onClick = { showAuthForChangePin = true },
+                trailingStatus = activeAuthMethod.displayName,
+                onClick = { showChangePinDialog = true },
                 testTag = "settings_change_pin_row"
             )
 
@@ -562,12 +577,18 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // Change PIN Dialog
+        // Change PIN / Authentication Method Dialog
         if (showChangePinDialog) {
             ChangePinDialog(
                 preferences = preferences,
-                onDismiss = { showChangePinDialog = false },
-                onSuccess = { showChangePinDialog = false }
+                onDismiss = {
+                    activeAuthMethod = preferences.getAuthMethod()
+                    showChangePinDialog = false
+                },
+                onSuccess = {
+                    activeAuthMethod = preferences.getAuthMethod()
+                    showChangePinDialog = false
+                }
             )
         }
 
@@ -616,20 +637,6 @@ fun SettingsScreen(
                         onClick = { showResetConfirmDialog = false }
                     )
                 }
-            )
-        }
-
-        // Auth challenge for Change PIN
-        if (showAuthForChangePin) {
-            AuthChallengeDialog(
-                title = "Change Master PIN",
-                subtitle = "Touch fingerprint sensor or enter PIN to change master PIN",
-                preferences = preferences,
-                onAuthorized = {
-                    showAuthForChangePin = false
-                    showChangePinDialog = true
-                },
-                onDismiss = { showAuthForChangePin = false }
             )
         }
 
@@ -827,123 +834,560 @@ private fun SettingsRow(
     }
 }
 
+private enum class ChangeAuthStep {
+    SELECT_METHOD,
+    VERIFY_EXISTING,
+    CREATE_NEW,
+    CONFIRM_NEW,
+    SUCCESS
+}
+
 @Composable
-private fun ChangePinDialog(
+internal fun ChangePinDialog(
     preferences: AppLockPreferences,
     onDismiss: () -> Unit,
     onSuccess: () -> Unit
 ) {
-    var step by remember { mutableIntStateOf(2) }
-    val pinLength = preferences.getPinLength()
+    val context = LocalContext.current
+    val activity = context as? FragmentActivity
+
+    var step by remember { mutableStateOf(ChangeAuthStep.SELECT_METHOD) }
+    val currentConfiguredMethod = remember(preferences) { preferences.getAuthMethod() }
+    var targetMethod by remember { mutableStateOf(currentConfiguredMethod) }
+
     var currentInput by remember { mutableStateOf("") }
-    var newPin by remember { mutableStateOf("") }
-    var confirmPin by remember { mutableStateOf("") }
+    var newCredential by remember { mutableStateOf("") }
+    var confirmCredential by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var lockoutSeconds by remember { mutableIntStateOf(preferences.getRemainingLockoutSeconds()) }
+
+    val isBiometricSupported = remember(activity) {
+        activity != null && BiometricHelper.isBiometricAvailable(activity)
+    }
+    val isBiometricEnabled = isBiometricSupported && preferences.isBiometricEnabled()
+
+    LaunchedEffect(lockoutSeconds) {
+        if (lockoutSeconds > 0) {
+            kotlinx.coroutines.delay(1000L)
+            lockoutSeconds = preferences.getRemainingLockoutSeconds()
+        }
+    }
+
+    fun triggerExistingBiometricVerification() {
+        if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
+            BiometricHelper.showBiometricPrompt(
+                activity = activity,
+                title = "Verify Current ${currentConfiguredMethod.displayName}",
+                subtitle = "Confirm your identity to set up ${targetMethod.displayName}",
+                negativeButtonText = "Use ${currentConfiguredMethod.displayName}",
+                onSuccess = {
+                    preferences.resetFailedAttempts()
+                    errorMsg = null
+                    currentInput = ""
+                    step = ChangeAuthStep.CREATE_NEW
+                },
+                onError = { _, _ -> }
+            )
+        }
+    }
+
+    fun handleFailedExistingVerification(message: String) {
+        preferences.recordFailedAttempt()
+        lockoutSeconds = preferences.getRemainingLockoutSeconds()
+        errorMsg = if (lockoutSeconds > 0) {
+            "Locked out for $lockoutSeconds seconds"
+        } else {
+            message
+        }
+    }
+
+    val dialogTitle = when (step) {
+        ChangeAuthStep.SELECT_METHOD -> "Select Authentication Method"
+        ChangeAuthStep.VERIFY_EXISTING -> "Verify Current ${currentConfiguredMethod.displayName}"
+        ChangeAuthStep.CREATE_NEW -> "Create ${targetMethod.displayName}"
+        ChangeAuthStep.CONFIRM_NEW -> "Confirm ${targetMethod.displayName}"
+        ChangeAuthStep.SUCCESS -> "Authentication Updated"
+    }
+
+    val dialogSubtitle = when (step) {
+        ChangeAuthStep.SELECT_METHOD -> "Choose how you want to unlock Smart AppLock and protected areas"
+        ChangeAuthStep.VERIFY_EXISTING -> "Enter your current ${currentConfiguredMethod.displayName} to continue"
+        ChangeAuthStep.CREATE_NEW -> when (targetMethod) {
+            AuthMethod.PIN_4 -> "Enter a new 4-digit numeric PIN"
+            AuthMethod.PIN_6 -> "Enter a new 6-digit numeric PIN"
+            AuthMethod.PATTERN -> "Connect at least 4 dots on the 3×3 pattern grid"
+            AuthMethod.PASSWORD -> "Enter a new password (1–32 characters)"
+        }
+        ChangeAuthStep.CONFIRM_NEW -> when (targetMethod) {
+            AuthMethod.PIN_4 -> "Re-enter your new 4-digit PIN to confirm"
+            AuthMethod.PIN_6 -> "Re-enter your new 6-digit PIN to confirm"
+            AuthMethod.PATTERN -> "Draw the same pattern again to confirm"
+            AuthMethod.PASSWORD -> "Re-enter your new password to confirm"
+        }
+        ChangeAuthStep.SUCCESS -> "${targetMethod.displayName} is now active across Smart AppLock"
+    }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (step == ChangeAuthStep.SUCCESS) onSuccess() else onDismiss()
+        },
         containerColor = NeoPalette.SurfaceDark,
         title = {
-            Text(
-                text = when (step) {
-                    1 -> "Enter Current PIN"
-                    2 -> "Enter New PIN"
-                    else -> "Confirm New PIN"
-                },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = NeoPalette.TextPrimary
-            )
-        },
-        text = {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                val inputLength = when (step) {
-                    1 -> currentInput.length
-                    2 -> newPin.length
-                    else -> confirmPin.length
-                }
-
-                PinDots(
-                    pinLength = pinLength,
-                    enteredLength = inputLength,
-                    isError = errorMsg != null
+                Text(
+                    text = dialogTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = NeoPalette.TextPrimary,
+                    textAlign = TextAlign.Center
                 )
-
-                if (errorMsg != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(errorMsg ?: "", style = MaterialTheme.typography.bodySmall, color = NeoPalette.ErrorRed)
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                PinKeypad(
-                    buttonSize = 62.dp,
-                    onDigitClick = { digit ->
-                        when (step) {
-                            1 -> {
-                                if (currentInput.length < pinLength) {
-                                    val next = currentInput + digit
-                                    currentInput = next
-                                    errorMsg = null
-                                    if (next.length == pinLength) {
-                                        if (preferences.verifyPin(next)) {
-                                            step = 2
-                                        } else {
-                                            errorMsg = "Incorrect current PIN"
-                                            currentInput = ""
-                                        }
-                                    }
-                                }
-                            }
-                            2 -> {
-                                if (newPin.length < pinLength) {
-                                    val next = newPin + digit
-                                    newPin = next
-                                    errorMsg = null
-                                    if (next.length == pinLength) {
-                                        step = 3
-                                    }
-                                }
-                            }
-                            3 -> {
-                                if (confirmPin.length < pinLength) {
-                                    val next = confirmPin + digit
-                                    confirmPin = next
-                                    errorMsg = null
-                                    if (next.length == pinLength) {
-                                        if (next == newPin) {
-                                            preferences.savePin(newPin)
-                                            onSuccess()
-                                        } else {
-                                            errorMsg = "PINs do not match"
-                                            confirmPin = ""
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    onDeleteClick = {
-                        when (step) {
-                            1 -> if (currentInput.isNotEmpty()) currentInput = currentInput.dropLast(1)
-                            2 -> if (newPin.isNotEmpty()) newPin = newPin.dropLast(1)
-                            3 -> if (confirmPin.isNotEmpty()) confirmPin = confirmPin.dropLast(1)
-                        }
-                        errorMsg = null
-                    }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = dialogSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NeoPalette.TextSecondary,
+                    textAlign = TextAlign.Center
                 )
             }
         },
-        confirmButton = {},
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                when (step) {
+                    ChangeAuthStep.SELECT_METHOD -> {
+                        val methodOptions = listOf(
+                            Triple(AuthMethod.PIN_4, "4-Digit PIN", Icons.Default.Pin),
+                            Triple(AuthMethod.PIN_6, "6-Digit PIN", Icons.Default.Dialpad),
+                            Triple(AuthMethod.PATTERN, "Pattern Lock", Icons.Default.GridOn),
+                            Triple(AuthMethod.PASSWORD, "Password", Icons.Default.Password)
+                        )
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            methodOptions.forEach { (method, label, icon) ->
+                                val isCurrent = method == currentConfiguredMethod
+                                NeoCard(
+                                    onClick = {
+                                        targetMethod = method
+                                        currentInput = ""
+                                        newCredential = ""
+                                        confirmCredential = ""
+                                        errorMsg = null
+                                        step = if (preferences.isCredentialConfigured()) {
+                                            ChangeAuthStep.VERIFY_EXISTING
+                                        } else {
+                                            ChangeAuthStep.CREATE_NEW
+                                        }
+                                    },
+                                    shape = NeoShapes.MediumCard,
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("auth_method_option_${method.storageKey}")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        NeoIconBadge(
+                                            icon = icon,
+                                            size = 40.dp,
+                                            iconSize = 20.dp,
+                                            isGlowing = isCurrent
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = NeoPalette.TextPrimary
+                                            )
+                                            Text(
+                                                text = when (method) {
+                                                    AuthMethod.PIN_4 -> "4 numeric digits"
+                                                    AuthMethod.PIN_6 -> "6 numeric digits"
+                                                    AuthMethod.PATTERN -> "3×3 grid (min 4 dots)"
+                                                    AuthMethod.PASSWORD -> "Text password (up to 32 chars)"
+                                                },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = NeoPalette.TextSecondary
+                                            )
+                                        }
+                                        if (isCurrent) {
+                                            NeoStatusBadge(
+                                                text = "ACTIVE",
+                                                color = NeoPalette.PrimaryGold
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                contentDescription = null,
+                                                tint = NeoPalette.TextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ChangeAuthStep.VERIFY_EXISTING -> {
+                        if (errorMsg != null) {
+                            Text(
+                                text = errorMsg ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NeoPalette.ErrorRed,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.testTag("change_auth_error_text")
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        when (currentConfiguredMethod) {
+                            AuthMethod.PIN_4, AuthMethod.PIN_6 -> {
+                                val existingPinLen = if (currentConfiguredMethod == AuthMethod.PIN_6) 6 else preferences.getPinLength()
+                                PinDots(
+                                    pinLength = existingPinLen,
+                                    enteredLength = currentInput.length,
+                                    isError = errorMsg != null
+                                )
+                                Spacer(modifier = Modifier.height(14.dp))
+                                PinKeypad(
+                                    buttonSize = 60.dp,
+                                    lockoutSeconds = lockoutSeconds,
+                                    onDigitClick = { digit ->
+                                        if (lockoutSeconds > 0) return@PinKeypad
+                                        if (currentInput.length < existingPinLen) {
+                                            val next = currentInput + digit
+                                            currentInput = next
+                                            errorMsg = null
+                                            if (next.length == existingPinLen) {
+                                                if (preferences.verifyCredential(next)) {
+                                                    preferences.resetFailedAttempts()
+                                                    currentInput = ""
+                                                    errorMsg = null
+                                                    step = ChangeAuthStep.CREATE_NEW
+                                                } else {
+                                                    handleFailedExistingVerification("Incorrect current PIN")
+                                                    currentInput = ""
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onDeleteClick = {
+                                        if (lockoutSeconds > 0) return@PinKeypad
+                                        if (currentInput.isNotEmpty()) {
+                                            currentInput = currentInput.dropLast(1)
+                                            errorMsg = null
+                                        }
+                                    },
+                                    extraLeftAction = {
+                                        if (isBiometricEnabled) {
+                                            NeoCircularButton(
+                                                onClick = { triggerExistingBiometricVerification() },
+                                                size = 56.dp,
+                                                isGoldSolid = true,
+                                                modifier = Modifier.testTag("change_auth_biometric_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Fingerprint,
+                                                    contentDescription = "Verify with Fingerprint",
+                                                    tint = NeoPalette.TextInverse,
+                                                    modifier = Modifier.size(26.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+
+                            AuthMethod.PATTERN -> {
+                                PatternLockGrid(
+                                    enabled = lockoutSeconds == 0,
+                                    isError = errorMsg != null,
+                                    gridSize = 216.dp,
+                                    onPatternStart = { errorMsg = null },
+                                    onPatternTooShort = {
+                                        errorMsg = "Connect at least 4 dots"
+                                    },
+                                    onPatternComplete = { drawnPattern ->
+                                        if (lockoutSeconds > 0) return@PatternLockGrid
+                                        if (preferences.verifyCredential(drawnPattern)) {
+                                            preferences.resetFailedAttempts()
+                                            errorMsg = null
+                                            step = ChangeAuthStep.CREATE_NEW
+                                        } else {
+                                            handleFailedExistingVerification("Incorrect current pattern")
+                                        }
+                                    }
+                                )
+                                if (isBiometricEnabled) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    BiometricActionRow(
+                                        onBiometricClick = { triggerExistingBiometricVerification() },
+                                        enabled = lockoutSeconds == 0,
+                                        testTag = "change_auth_biometric_button"
+                                    )
+                                }
+                            }
+
+                            AuthMethod.PASSWORD -> {
+                                PasswordAuthInput(
+                                    value = currentInput,
+                                    onValueChange = {
+                                        currentInput = it
+                                        errorMsg = null
+                                    },
+                                    enabled = lockoutSeconds == 0,
+                                    isError = errorMsg != null,
+                                    label = "Current Password",
+                                    submitButtonText = "Verify Current Password",
+                                    onSubmit = {
+                                        if (lockoutSeconds > 0) return@PasswordAuthInput
+                                        if (currentInput.isEmpty()) {
+                                            errorMsg = "Password cannot be empty"
+                                            return@PasswordAuthInput
+                                        }
+                                        if (preferences.verifyCredential(currentInput)) {
+                                            preferences.resetFailedAttempts()
+                                            currentInput = ""
+                                            errorMsg = null
+                                            step = ChangeAuthStep.CREATE_NEW
+                                        } else {
+                                            handleFailedExistingVerification("Incorrect current password")
+                                            currentInput = ""
+                                        }
+                                    }
+                                )
+                                if (isBiometricEnabled) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    BiometricActionRow(
+                                        onBiometricClick = { triggerExistingBiometricVerification() },
+                                        enabled = lockoutSeconds == 0,
+                                        testTag = "change_auth_biometric_button"
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    ChangeAuthStep.CREATE_NEW, ChangeAuthStep.CONFIRM_NEW -> {
+                        val isCreate = step == ChangeAuthStep.CREATE_NEW
+                        if (errorMsg != null) {
+                            Text(
+                                text = errorMsg ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NeoPalette.ErrorRed,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.testTag("change_auth_error_text")
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        when (targetMethod) {
+                            AuthMethod.PIN_4, AuthMethod.PIN_6 -> {
+                                val requiredPinLen = if (targetMethod == AuthMethod.PIN_6) 6 else 4
+                                val activePinValue = if (isCreate) newCredential else confirmCredential
+
+                                PinDots(
+                                    pinLength = requiredPinLen,
+                                    enteredLength = activePinValue.length,
+                                    isError = errorMsg != null
+                                )
+                                Spacer(modifier = Modifier.height(14.dp))
+                                PinKeypad(
+                                    buttonSize = 60.dp,
+                                    onDigitClick = { digit ->
+                                        if (isCreate) {
+                                            if (newCredential.length < requiredPinLen) {
+                                                val next = newCredential + digit
+                                                newCredential = next
+                                                errorMsg = null
+                                                if (next.length == requiredPinLen) {
+                                                    confirmCredential = ""
+                                                    step = ChangeAuthStep.CONFIRM_NEW
+                                                }
+                                            }
+                                        } else {
+                                            if (confirmCredential.length < requiredPinLen) {
+                                                val next = confirmCredential + digit
+                                                confirmCredential = next
+                                                errorMsg = null
+                                                if (next.length == requiredPinLen) {
+                                                    if (next == newCredential) {
+                                                        preferences.saveAuthCredential(targetMethod, newCredential)
+                                                        step = ChangeAuthStep.SUCCESS
+                                                    } else {
+                                                        errorMsg = "PINs do not match. Please try again."
+                                                        confirmCredential = ""
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onDeleteClick = {
+                                        if (isCreate) {
+                                            if (newCredential.isNotEmpty()) newCredential = newCredential.dropLast(1)
+                                        } else {
+                                            if (confirmCredential.isNotEmpty()) confirmCredential = confirmCredential.dropLast(1)
+                                        }
+                                        errorMsg = null
+                                    }
+                                )
+                            }
+
+                            AuthMethod.PATTERN -> {
+                                androidx.compose.runtime.key(step) {
+                                    PatternLockGrid(
+                                        isError = errorMsg != null,
+                                        gridSize = 216.dp,
+                                        onPatternStart = { errorMsg = null },
+                                        onPatternTooShort = {
+                                            errorMsg = "Connect at least 4 dots"
+                                        },
+                                        onPatternComplete = { drawnPattern ->
+                                            val normalizedDrawn = AppLockPreferences.normalizePatternString(drawnPattern)
+                                            if (!AppLockPreferences.isValidCredential(AuthMethod.PATTERN, normalizedDrawn)) {
+                                                errorMsg = "Connect at least 4 dots"
+                                                return@PatternLockGrid
+                                            }
+                                            when (step) {
+                                                ChangeAuthStep.CREATE_NEW -> {
+                                                    newCredential = normalizedDrawn
+                                                    confirmCredential = ""
+                                                    errorMsg = null
+                                                    step = ChangeAuthStep.CONFIRM_NEW
+                                                }
+                                                ChangeAuthStep.CONFIRM_NEW -> {
+                                                    val normalizedFirst = AppLockPreferences.normalizePatternString(newCredential)
+                                                    if (normalizedDrawn == normalizedFirst && normalizedFirst.isNotEmpty()) {
+                                                        preferences.saveAuthCredential(AuthMethod.PATTERN, normalizedFirst)
+                                                        newCredential = ""
+                                                        confirmCredential = ""
+                                                        errorMsg = null
+                                                        step = ChangeAuthStep.SUCCESS
+                                                    } else {
+                                                        errorMsg = "Patterns do not match. Try again."
+                                                        confirmCredential = ""
+                                                    }
+                                                }
+                                                else -> Unit
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+
+                            AuthMethod.PASSWORD -> {
+                                val currentPwdVal = if (isCreate) newCredential else confirmCredential
+                                PasswordAuthInput(
+                                    value = currentPwdVal,
+                                    onValueChange = { updated ->
+                                        if (isCreate) {
+                                            newCredential = updated
+                                        } else {
+                                            confirmCredential = updated
+                                        }
+                                        errorMsg = null
+                                    },
+                                    isError = errorMsg != null,
+                                    label = if (isCreate) "New Password" else "Confirm New Password",
+                                    placeholder = "1 to 32 characters",
+                                    submitButtonText = if (isCreate) "Continue" else "Save Password",
+                                    onSubmit = {
+                                        if (isCreate) {
+                                            if (!AppLockPreferences.isValidCredential(AuthMethod.PASSWORD, newCredential)) {
+                                                errorMsg = "Password must be between 1 and 32 characters"
+                                                return@PasswordAuthInput
+                                            }
+                                            confirmCredential = ""
+                                            errorMsg = null
+                                            step = ChangeAuthStep.CONFIRM_NEW
+                                        } else {
+                                            if (confirmCredential.isEmpty()) {
+                                                errorMsg = "Please re-enter your password to confirm"
+                                                return@PasswordAuthInput
+                                            }
+                                            if (confirmCredential == newCredential) {
+                                                preferences.saveAuthCredential(AuthMethod.PASSWORD, newCredential)
+                                                step = ChangeAuthStep.SUCCESS
+                                            } else {
+                                                errorMsg = "Passwords do not match. Please try again."
+                                                confirmCredential = ""
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    ChangeAuthStep.SUCCESS -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Success",
+                            tint = NeoPalette.SuccessGreen,
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "${targetMethod.displayName} saved successfully!",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = NeoPalette.PrimaryGold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("change_auth_success_text")
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (step == ChangeAuthStep.SUCCESS) {
+                NeoButton(
+                    text = "Done",
+                    isPrimaryGlowing = true,
+                    shape = NeoShapes.FullPill,
+                    onClick = onSuccess,
+                    modifier = Modifier.testTag("change_auth_done_button")
+                )
+            }
+        },
         dismissButton = {
-            NeoButton(
-                text = "Cancel",
-                shape = NeoShapes.FullPill,
-                onClick = onDismiss
-            )
+            if (step != ChangeAuthStep.SUCCESS) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (step != ChangeAuthStep.SELECT_METHOD) {
+                        NeoButton(
+                            text = "Back",
+                            shape = NeoShapes.FullPill,
+                            onClick = {
+                                errorMsg = null
+                                currentInput = ""
+                                newCredential = ""
+                                confirmCredential = ""
+                                step = ChangeAuthStep.SELECT_METHOD
+                            },
+                            modifier = Modifier.testTag("change_auth_back_button")
+                        )
+                    }
+                    NeoButton(
+                        text = "Cancel",
+                        shape = NeoShapes.FullPill,
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("change_auth_cancel_button")
+                    )
+                }
+            }
         }
     )
 }

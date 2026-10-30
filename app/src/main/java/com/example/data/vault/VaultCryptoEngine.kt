@@ -95,6 +95,44 @@ object VaultCryptoEngine {
         fallbackSoftwareKey = SecretKeySpec(keyBytes, "AES")
     }
 
+    private val keystoreOpLock = Any()
+    private const val STREAM_BUFFER_SIZE = 16 * 1024
+
+    /**
+     * Reads exactly [length] bytes into [buffer] starting at [offset], or throws if EOF is reached early.
+     */
+    private fun readFully(inputStream: InputStream, buffer: ByteArray, offset: Int = 0, length: Int = buffer.size): Int {
+        var totalRead = 0
+        while (totalRead < length) {
+            val read = inputStream.read(buffer, offset + totalRead, length - totalRead)
+            if (read == -1) break
+            totalRead += read
+        }
+        return totalRead
+    }
+
+    /**
+     * Streams all remaining bytes from [inputStream] through [cipher] into [outputStream]
+     * using fixed-size chunks without closing either stream or swallowing authentication exceptions.
+     */
+    private fun processCipherStream(inputStream: InputStream, outputStream: OutputStream, cipher: Cipher) {
+        val inBuffer = ByteArray(STREAM_BUFFER_SIZE)
+        var bytesRead: Int
+        while (inputStream.read(inBuffer).also { bytesRead = it } != -1) {
+            if (bytesRead > 0) {
+                val outChunk = cipher.update(inBuffer, 0, bytesRead)
+                if (outChunk != null && outChunk.isNotEmpty()) {
+                    outputStream.write(outChunk)
+                }
+            }
+        }
+        val finalChunk = cipher.doFinal()
+        if (finalChunk != null && finalChunk.isNotEmpty()) {
+            outputStream.write(finalChunk)
+        }
+        outputStream.flush()
+    }
+
     /**
      * Encrypts plaintext stream to output stream using AES-256-GCM.
      * Initializes encryption with the key so Android Keystore generates its own cryptographic IV,
@@ -104,24 +142,19 @@ object VaultCryptoEngine {
      * [Magic 4B: 'SALV'] + [IV 12B] + [Ciphertext + Tag 16B]
      */
     fun encryptStream(inputStream: InputStream, outputStream: OutputStream, key: SecretKey = getOrCreateMasterKey()) {
-        val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key)
+        synchronized(keystoreOpLock) {
+            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, key)
 
-        val iv = cipher.iv
-        if (iv == null || iv.size != GCM_IV_LENGTH_BYTES) {
-            throw IllegalStateException("Cipher failed to generate a valid $GCM_IV_LENGTH_BYTES-byte AES-GCM IV")
-        }
-
-        outputStream.write(MAGIC_HEADER)
-        outputStream.write(iv)
-
-        CipherOutputStream(outputStream, cipher).use { cipherOut ->
-            val buffer = ByteArray(64 * 1024)
-            var bytesRead: Int
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                cipherOut.write(buffer, 0, bytesRead)
+            val iv = cipher.iv
+            if (iv == null || iv.size != GCM_IV_LENGTH_BYTES) {
+                throw IllegalStateException("Cipher failed to generate a valid $GCM_IV_LENGTH_BYTES-byte AES-GCM IV")
             }
-            cipherOut.flush()
+
+            outputStream.write(MAGIC_HEADER)
+            outputStream.write(iv)
+
+            processCipherStream(inputStream, outputStream, cipher)
         }
     }
 
@@ -131,38 +164,33 @@ object VaultCryptoEngine {
      * extracts stored IV, and decrypts with GCM tag verification.
      */
     fun decryptStream(inputStream: InputStream, outputStream: OutputStream, key: SecretKey = getOrCreateMasterKey()) {
-        val prefix = ByteArray(MAGIC_HEADER.size)
-        val prefixRead = inputStream.read(prefix)
-        if (prefixRead != MAGIC_HEADER.size) {
-            throw IllegalArgumentException("Invalid file format: encrypted stream is truncated")
-        }
-
-        val iv = ByteArray(GCM_IV_LENGTH_BYTES)
-        if (prefix.contentEquals(MAGIC_HEADER)) {
-            val ivRead = inputStream.read(iv)
-            if (ivRead != GCM_IV_LENGTH_BYTES) {
-                throw IllegalArgumentException("Invalid file format: missing IV")
+        synchronized(keystoreOpLock) {
+            val prefix = ByteArray(MAGIC_HEADER.size)
+            val prefixRead = readFully(inputStream, prefix)
+            if (prefixRead != MAGIC_HEADER.size) {
+                throw IllegalArgumentException("Invalid file format: encrypted stream is truncated")
             }
-        } else {
-            // Backward compatibility for legacy headerless entries formatted as [12B IV] + [Ciphertext + Tag]
-            System.arraycopy(prefix, 0, iv, 0, MAGIC_HEADER.size)
-            val remainingIvBytes = GCM_IV_LENGTH_BYTES - MAGIC_HEADER.size
-            val remRead = inputStream.read(iv, MAGIC_HEADER.size, remainingIvBytes)
-            if (remRead != remainingIvBytes) {
-                throw IllegalArgumentException("Invalid file format: missing SALV magic header or legacy IV")
-            }
-        }
 
-        val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
-
-        CipherInputStream(inputStream, cipher).use { cipherIn ->
-            val buffer = ByteArray(64 * 1024)
-            var bytesRead: Int
-            while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
-                outputStream.write(buffer, 0, bytesRead)
+            val iv = ByteArray(GCM_IV_LENGTH_BYTES)
+            if (prefix.contentEquals(MAGIC_HEADER)) {
+                val ivRead = readFully(inputStream, iv)
+                if (ivRead != GCM_IV_LENGTH_BYTES) {
+                    throw IllegalArgumentException("Invalid file format: missing IV")
+                }
+            } else {
+                // Backward compatibility for legacy headerless entries formatted as [12B IV] + [Ciphertext + Tag]
+                System.arraycopy(prefix, 0, iv, 0, MAGIC_HEADER.size)
+                val remainingIvBytes = GCM_IV_LENGTH_BYTES - MAGIC_HEADER.size
+                val remRead = readFully(inputStream, iv, MAGIC_HEADER.size, remainingIvBytes)
+                if (remRead != remainingIvBytes) {
+                    throw IllegalArgumentException("Invalid file format: missing SALV magic header or legacy IV")
+                }
             }
-            outputStream.flush()
+
+            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+
+            processCipherStream(inputStream, outputStream, cipher)
         }
     }
 
@@ -221,14 +249,7 @@ object VaultCryptoEngine {
         val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, derivedKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
 
-        CipherOutputStream(outputStream, cipher).use { cipherOut ->
-            val buffer = ByteArray(64 * 1024)
-            var bytesRead: Int
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                cipherOut.write(buffer, 0, bytesRead)
-            }
-            cipherOut.flush()
-        }
+        processCipherStream(inputStream, outputStream, cipher)
     }
 
     /**
@@ -241,19 +262,19 @@ object VaultCryptoEngine {
         passphrase: CharArray
     ) {
         val magic = ByteArray(BACKUP_MAGIC_V1.size)
-        val magicRead = inputStream.read(magic)
+        val magicRead = readFully(inputStream, magic)
         if (magicRead != BACKUP_MAGIC_V1.size || !magic.contentEquals(BACKUP_MAGIC_V1)) {
             throw IllegalArgumentException("Invalid backup format: missing SAL_BACKUP_V1 header")
         }
 
         val salt = ByteArray(BACKUP_SALT_LENGTH)
-        val saltRead = inputStream.read(salt)
+        val saltRead = readFully(inputStream, salt)
         if (saltRead != BACKUP_SALT_LENGTH) {
             throw IllegalArgumentException("Corrupt backup: missing salt")
         }
 
         val iv = ByteArray(GCM_IV_LENGTH_BYTES)
-        val ivRead = inputStream.read(iv)
+        val ivRead = readFully(inputStream, iv)
         if (ivRead != GCM_IV_LENGTH_BYTES) {
             throw IllegalArgumentException("Corrupt backup: missing IV")
         }
@@ -263,13 +284,6 @@ object VaultCryptoEngine {
         val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, derivedKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
 
-        CipherInputStream(inputStream, cipher).use { cipherIn ->
-            val buffer = ByteArray(64 * 1024)
-            var bytesRead: Int
-            while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
-                outputStream.write(buffer, 0, bytesRead)
-            }
-            outputStream.flush()
-        }
+        processCipherStream(inputStream, outputStream, cipher)
     }
 }

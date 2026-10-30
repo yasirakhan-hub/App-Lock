@@ -1,11 +1,13 @@
 package com.example.ui.vault
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -102,9 +104,16 @@ import com.example.ui.common.NeoInsetBox
 import com.example.ui.common.NeoPalette
 import com.example.ui.common.NeoShapes
 import com.example.ui.common.NeoStatusBadge
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -116,6 +125,283 @@ private enum class VaultFilterPill {
     OTHERS
 }
 
+data class SafPickerRequest(
+    val primaryMimeType: String,
+    val extraMimeTypes: List<String> = emptyList()
+)
+
+/**
+ * Singleton Android Storage Access Framework (SAF) contract for selecting one or multiple files.
+ * Being a singleton `object` ensures `rememberLauncherForActivityResult`'s internal `DisposableEffect`
+ * never sees a new contract instance on recomposition (which would otherwise unregister the launcher
+ * and drop pending activity results).
+ */
+object SafOpenMultipleDocumentsContract : ActivityResultContract<SafPickerRequest, List<Uri>>() {
+    override fun createIntent(context: Context, input: SafPickerRequest): Intent {
+        val openDocIntent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = input.primaryMimeType
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+            if (input.extraMimeTypes.size > 1) {
+                putExtra(Intent.EXTRA_MIME_TYPES, input.extraMimeTypes.toTypedArray())
+            }
+        }
+        if (context.packageManager.resolveActivity(openDocIntent, 0) != null) {
+            return openDocIntent
+        }
+
+        val getContentIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = input.primaryMimeType
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (input.extraMimeTypes.size > 1) {
+                putExtra(Intent.EXTRA_MIME_TYPES, input.extraMimeTypes.toTypedArray())
+            }
+        }
+        if (context.packageManager.resolveActivity(getContentIntent, 0) != null) {
+            return getContentIntent
+        }
+
+        return openDocIntent
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): List<Uri> {
+        if (resultCode != Activity.RESULT_OK || intent == null) {
+            return emptyList()
+        }
+        val uris = LinkedHashSet<Uri>()
+        intent.data?.let { uris.add(it) }
+        val clipData = intent.clipData
+        if (clipData != null) {
+            for (i in 0 until clipData.itemCount) {
+                clipData.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+        }
+        return uris.toList()
+    }
+}
+
+object SafCreateDocumentContract : ActivityResultContract<String, Uri?>() {
+    override fun createIntent(context: Context, input: String): Intent {
+        return Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream"
+            putExtra(Intent.EXTRA_TITLE, input)
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+        return if (resultCode == Activity.RESULT_OK) intent?.data else null
+    }
+}
+
+object SafOpenSingleDocumentContract : ActivityResultContract<String, Uri?>() {
+    override fun createIntent(context: Context, input: String): Intent {
+        val openDocIntent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = input
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        if (context.packageManager.resolveActivity(openDocIntent, 0) != null) {
+            return openDocIntent
+        }
+
+        val getContentIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = input
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (context.packageManager.resolveActivity(getContentIntent, 0) != null) {
+            return getContentIntent
+        }
+
+        return openDocIntent
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+        return if (resultCode == Activity.RESULT_OK) intent?.data else null
+    }
+}
+
+/**
+ * ViewModel retaining the VaultRepository instance, active import job, and Vault UI state across
+ * configuration changes and system file picker Activity result transitions.
+ */
+class VaultViewModel(application: Application) : AndroidViewModel(application) {
+    val repository: VaultRepository by lazy { VaultRepository(application.applicationContext) }
+
+    var selectedPillName by mutableStateOf(VaultFilterPill.PHOTOS.name)
+    var items by mutableStateOf<List<VaultItem>>(emptyList())
+    var allRecentItems by mutableStateOf<List<VaultItem>>(emptyList())
+    var isLoading by mutableStateOf(true)
+
+    var isImporting by mutableStateOf(false)
+    var importProgressPercent by mutableIntStateOf(0)
+    var importStepIndex by mutableIntStateOf(0)
+    var activeImportJob: Job? = null
+
+    var showImportSuccessDialog by mutableStateOf<List<VaultItem>?>(null)
+    var statusMessage by mutableStateOf<String?>(null)
+    var isErrorStatus by mutableStateOf(false)
+    var lastPickerReturnTimestampMs: Long = 0L
+
+    fun refreshItems() {
+        val pill = runCatching { VaultFilterPill.valueOf(selectedPillName) }.getOrDefault(VaultFilterPill.PHOTOS)
+        viewModelScope.launch {
+            isLoading = true
+            val (recent, filtered) = withContext(Dispatchers.IO) {
+                val all = repository.getAllItems().sortedByDescending { it.importedTimestamp }
+                val catItems = when (pill) {
+                    VaultFilterPill.PHOTOS -> repository.getItems(VaultCategory.PICTURE)
+                    VaultFilterPill.VIDEOS -> repository.getItems(VaultCategory.VIDEO)
+                    VaultFilterPill.DOCUMENTS -> repository.getItems(VaultCategory.DOCUMENT)
+                    VaultFilterPill.OTHERS -> all
+                }
+                all to catItems
+            }
+            allRecentItems = recent
+            items = filtered
+            isLoading = false
+        }
+    }
+
+    fun cancelActiveImport(onImportInFlightChanged: (Boolean) -> Unit = {}) {
+        activeImportJob?.cancel()
+        activeImportJob = null
+        isImporting = false
+        onImportInFlightChanged(false)
+    }
+
+    fun clearSessionOnExit(onImportInFlightChanged: (Boolean) -> Unit = {}) {
+        cancelActiveImport(onImportInFlightChanged)
+        showImportSuccessDialog = null
+        items = emptyList()
+        allRecentItems = emptyList()
+    }
+
+    fun startBatchImport(
+        uris: List<Uri>,
+        mediaLabel: String,
+        fallbackCategory: VaultCategory?,
+        selectedCategory: VaultCategory,
+        onImportInFlightChanged: (Boolean) -> Unit
+    ) {
+        if (uris.isEmpty()) return
+
+        activeImportJob?.cancel()
+        activeImportJob = viewModelScope.launch {
+            onImportInFlightChanged(true)
+            isImporting = true
+            importStepIndex = 0
+            importProgressPercent = 18
+            try {
+                delay(80L)
+
+                val importedList = mutableListOf<VaultItem>()
+                var duplicateCount = 0
+                var failureCount = 0
+
+                importStepIndex = 1
+                importProgressPercent = 45
+
+                uris.forEachIndexed { idx, uri ->
+                    val result = repository.importFromUri(
+                        uri = uri,
+                        fallbackCategory = fallbackCategory
+                    )
+                    result.onSuccess { importedItem ->
+                        importedList.add(importedItem)
+                    }
+                    result.onFailure { error ->
+                        if (error is DuplicateVaultItemException) {
+                            duplicateCount++
+                        } else {
+                            failureCount++
+                        }
+                    }
+                    importStepIndex = 2
+                    importProgressPercent = 55 + (((idx + 1) * 35) / uris.size.coerceAtLeast(1))
+                }
+
+                importStepIndex = 3
+                importProgressPercent = 96
+                delay(80L)
+
+                if (importedList.isNotEmpty() && importedList.none { it.category == selectedCategory }) {
+                    selectedPillName = when (importedList.first().category) {
+                        VaultCategory.PICTURE -> VaultFilterPill.PHOTOS.name
+                        VaultCategory.VIDEO -> VaultFilterPill.VIDEOS.name
+                        VaultCategory.DOCUMENT -> VaultFilterPill.DOCUMENTS.name
+                    }
+                }
+
+                val activePill = runCatching { VaultFilterPill.valueOf(selectedPillName) }
+                    .getOrDefault(VaultFilterPill.PHOTOS)
+
+                val (recent, filtered) = withContext(Dispatchers.IO) {
+                    val all = repository.getAllItems().sortedByDescending { it.importedTimestamp }
+                    val catItems = when (activePill) {
+                        VaultFilterPill.PHOTOS -> repository.getItems(VaultCategory.PICTURE)
+                        VaultFilterPill.VIDEOS -> repository.getItems(VaultCategory.VIDEO)
+                        VaultFilterPill.DOCUMENTS -> repository.getItems(VaultCategory.DOCUMENT)
+                        VaultFilterPill.OTHERS -> all
+                    }
+                    all to catItems
+                }
+                allRecentItems = recent
+                items = filtered
+                isImporting = false
+                isLoading = false
+
+                when {
+                    importedList.isNotEmpty() -> {
+                        showImportSuccessDialog = importedList
+                        if (failureCount > 0 || duplicateCount > 0) {
+                            val parts = mutableListOf<String>()
+                            parts.add("Imported ${importedList.size} $mediaLabel")
+                            if (duplicateCount > 0) parts.add("$duplicateCount duplicate(s) skipped")
+                            if (failureCount > 0) parts.add("$failureCount failed to encrypt")
+                            isErrorStatus = failureCount > 0
+                            statusMessage = parts.joinToString(" • ")
+                        } else {
+                            isErrorStatus = false
+                            statusMessage = null
+                        }
+                    }
+                    failureCount > 0 && duplicateCount > 0 -> {
+                        isErrorStatus = true
+                        statusMessage = "Could not import $failureCount $mediaLabel ($duplicateCount duplicate(s) already in vault)."
+                    }
+                    failureCount > 0 -> {
+                        isErrorStatus = true
+                        statusMessage = "Unable to import selected $mediaLabel. Please verify the file is accessible and not empty."
+                    }
+                    duplicateCount > 0 -> {
+                        isErrorStatus = false
+                        statusMessage = "$duplicateCount $mediaLabel already in your encrypted vault."
+                    }
+                }
+            } finally {
+                isImporting = false
+                onImportInFlightChanged(false)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VaultScreen(
@@ -125,13 +411,26 @@ fun VaultScreen(
     onNavigateToSettings: (() -> Unit)? = null,
     onSystemPickerLaunched: () -> Unit = {},
     onSystemPickerFinished: () -> Unit = {},
+    onImportInFlightChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val repository = remember { VaultRepository(context) }
+    val app = context.applicationContext as Application
+    val viewModelStoreOwner = context as? ViewModelStoreOwner
+    val vaultViewModel = remember(viewModelStoreOwner) {
+        if (viewModelStoreOwner != null) {
+            ViewModelProvider(
+                viewModelStoreOwner,
+                ViewModelProvider.AndroidViewModelFactory.getInstance(app)
+            )[VaultViewModel::class.java]
+        } else {
+            VaultViewModel(app)
+        }
+    }
+    val repository = vaultViewModel.repository
     val scope = rememberCoroutineScope()
 
-    var selectedPillName by rememberSaveable { mutableStateOf(VaultFilterPill.PHOTOS.name) }
+    var selectedPillName by vaultViewModel::selectedPillName
     val selectedPill = remember(selectedPillName) {
         runCatching { VaultFilterPill.valueOf(selectedPillName) }.getOrDefault(VaultFilterPill.PHOTOS)
     }
@@ -144,175 +443,102 @@ fun VaultScreen(
         }
     }
 
-    var items by remember { mutableStateOf<List<VaultItem>>(emptyList()) }
-    var allRecentItems by remember { mutableStateOf<List<VaultItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    var items by vaultViewModel::items
+    var allRecentItems by vaultViewModel::allRecentItems
+    var isLoading by vaultViewModel::isLoading
 
     // Importing progress state (Panel 6)
-    var isImporting by remember { mutableStateOf(false) }
-    var importProgressPercent by remember { mutableIntStateOf(0) }
-    var importStepIndex by remember { mutableIntStateOf(0) }
-    var activeImportJob by remember { mutableStateOf<Job?>(null) }
+    var isImporting by vaultViewModel::isImporting
+    val importProgressPercent by vaultViewModel::importProgressPercent
+    val importStepIndex by vaultViewModel::importStepIndex
 
     var selectedItemForDetail by remember { mutableStateOf<VaultItem?>(null) }
     var itemToExportId by rememberSaveable { mutableStateOf<String?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf<VaultItem?>(null) }
-    var showImportSuccessDialog by remember { mutableStateOf<List<VaultItem>?>(null) }
+    var showImportSuccessDialog by vaultViewModel::showImportSuccessDialog
     var showMenu by remember { mutableStateOf(false) }
 
     var showBackupDialog by rememberSaveable { mutableStateOf(false) }
     var showRestoreDialog by rememberSaveable { mutableStateOf(false) }
-    var statusMessage by rememberSaveable { mutableStateOf<String?>(null) }
-    var isErrorStatus by rememberSaveable { mutableStateOf(false) }
+    var statusMessage by vaultViewModel::statusMessage
+    var isErrorStatus by vaultViewModel::isErrorStatus
 
     fun refreshItems() {
-        scope.launch {
-            isLoading = true
-            allRecentItems = repository.getAllItems().sortedByDescending { it.importedTimestamp }
-            items = when (selectedPill) {
-                VaultFilterPill.PHOTOS -> repository.getItems(VaultCategory.PICTURE)
-                VaultFilterPill.VIDEOS -> repository.getItems(VaultCategory.VIDEO)
-                VaultFilterPill.DOCUMENTS -> repository.getItems(VaultCategory.DOCUMENT)
-                VaultFilterPill.OTHERS -> repository.getAllItems()
-            }
-            isLoading = false
-        }
+        vaultViewModel.refreshItems()
     }
 
     LaunchedEffect(selectedPill) {
-        refreshItems()
+        if (!isImporting) {
+            refreshItems()
+        }
     }
 
-    // Immediately clear sensitive vault lists and open previews from memory when leaving Files
+    // Clear transient detail/confirm dialogs when composition disposes,
+    // without cancelling an in-flight ViewModel import job across configuration changes.
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
-            activeImportJob?.cancel()
             selectedItemForDetail = null
             showDeleteConfirmDialog = null
-            showImportSuccessDialog = null
-            items = emptyList()
-            allRecentItems = emptyList()
         }
     }
 
     BackHandler {
-        if (showImportSuccessDialog != null) {
+        val elapsedSincePickerReturn = System.currentTimeMillis() - vaultViewModel.lastPickerReturnTimestampMs
+        if (elapsedSincePickerReturn in 0L..350L) {
+            // Ignore stray back events immediately following system picker activity dismissal
+            return@BackHandler
+        }
+        if (showDeleteConfirmDialog != null) {
+            showDeleteConfirmDialog = null
+        } else if (selectedItemForDetail != null) {
+            selectedItemForDetail = null
+        } else if (showImportSuccessDialog != null) {
             showImportSuccessDialog = null
         } else if (isImporting) {
-            activeImportJob?.cancel()
-            isImporting = false
+            vaultViewModel.cancelActiveImport(onImportInFlightChanged)
         } else {
+            vaultViewModel.clearSessionOnExit(onImportInFlightChanged)
             onNavigateBack()
         }
     }
 
-    fun handleBatchImport(uris: List<Uri>, mediaLabel: String) {
+    fun handleBatchImport(
+        uris: List<Uri>,
+        mediaLabel: String,
+        fallbackCategory: VaultCategory? = selectedCategory
+    ) {
+        vaultViewModel.lastPickerReturnTimestampMs = System.currentTimeMillis()
         onSystemPickerFinished()
         if (uris.isEmpty()) {
             // User cancelled system picker; remain on VaultScreen without error
             return
         }
-        activeImportJob = scope.launch {
-            isImporting = true
-            importStepIndex = 0
-            importProgressPercent = 18
-            delay(120L)
-
-            val importedList = mutableListOf<VaultItem>()
-            var duplicateCount = 0
-            var failureCount = 0
-
-            importStepIndex = 1
-            importProgressPercent = 45
-
-            uris.forEachIndexed { idx, uri ->
-                val result = repository.importFromUri(uri)
-                result.onSuccess { importedItem ->
-                    importedList.add(importedItem)
-                }
-                result.onFailure { error ->
-                    if (error is DuplicateVaultItemException) {
-                        duplicateCount++
-                    } else {
-                        failureCount++
-                    }
-                }
-                importStepIndex = 2
-                importProgressPercent = 55 + (((idx + 1) * 35) / uris.size.coerceAtLeast(1))
-            }
-
-            importStepIndex = 3
-            importProgressPercent = 96
-            delay(120L)
-
-            if (importedList.isNotEmpty() && importedList.none { it.category == selectedCategory }) {
-                selectedPillName = when (importedList.first().category) {
-                    VaultCategory.PICTURE -> VaultFilterPill.PHOTOS.name
-                    VaultCategory.VIDEO -> VaultFilterPill.VIDEOS.name
-                    VaultCategory.DOCUMENT -> VaultFilterPill.DOCUMENTS.name
-                }
-            }
-
-            allRecentItems = repository.getAllItems().sortedByDescending { it.importedTimestamp }
-            items = when (runCatching { VaultFilterPill.valueOf(selectedPillName) }.getOrDefault(selectedPill)) {
-                VaultFilterPill.PHOTOS -> repository.getItems(VaultCategory.PICTURE)
-                VaultFilterPill.VIDEOS -> repository.getItems(VaultCategory.VIDEO)
-                VaultFilterPill.DOCUMENTS -> repository.getItems(VaultCategory.DOCUMENT)
-                VaultFilterPill.OTHERS -> repository.getAllItems()
-            }
-            isImporting = false
-            isLoading = false
-
-            when {
-                importedList.isNotEmpty() -> {
-                    showImportSuccessDialog = importedList
-                    if (failureCount > 0 || duplicateCount > 0) {
-                        val parts = mutableListOf<String>()
-                        parts.add("Imported ${importedList.size} $mediaLabel")
-                        if (duplicateCount > 0) parts.add("$duplicateCount duplicate(s) skipped")
-                        if (failureCount > 0) parts.add("$failureCount failed to encrypt")
-                        isErrorStatus = failureCount > 0
-                        statusMessage = parts.joinToString(" • ")
-                    } else {
-                        isErrorStatus = false
-                        statusMessage = null
-                    }
-                }
-                failureCount > 0 && duplicateCount > 0 -> {
-                    isErrorStatus = true
-                    statusMessage = "Could not import $failureCount $mediaLabel ($duplicateCount duplicate(s) already in vault)."
-                }
-                failureCount > 0 -> {
-                    isErrorStatus = true
-                    statusMessage = "Unable to import selected $mediaLabel. Please verify the file is accessible and not empty."
-                }
-                duplicateCount > 0 -> {
-                    isErrorStatus = false
-                    statusMessage = "$duplicateCount $mediaLabel already in your encrypted vault."
-                }
-            }
-        }
+        vaultViewModel.startBatchImport(
+            uris = uris,
+            mediaLabel = mediaLabel,
+            fallbackCategory = fallbackCategory,
+            selectedCategory = selectedCategory,
+            onImportInFlightChanged = onImportInFlightChanged
+        )
     }
 
-    // SAF Photo & Video Picker (zero-permission)
-    val mediaPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia()
-    ) { uris ->
-        val label = if (selectedCategory == VaultCategory.VIDEO) "video(s)" else "photo(s)"
-        handleBatchImport(uris, label)
-    }
-
-    // SAF Document Picker
+    // Android Storage Access Framework (SAF) Multi-File Picker
     val docPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenMultipleDocuments()
+        contract = SafOpenMultipleDocumentsContract
     ) { uris ->
-        handleBatchImport(uris, "document(s)")
+        val label = when (selectedPill) {
+            VaultFilterPill.PHOTOS -> "photo(s)"
+            VaultFilterPill.VIDEOS -> "video(s)"
+            VaultFilterPill.DOCUMENTS, VaultFilterPill.OTHERS -> "document(s)"
+        }
+        handleBatchImport(uris, label, selectedCategory)
     }
 
     // SAF Export Single Item
     val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+        contract = SafCreateDocumentContract
     ) { destUri ->
+        vaultViewModel.lastPickerReturnTimestampMs = System.currentTimeMillis()
         onSystemPickerFinished()
         val exportId = itemToExportId
         val item = exportId?.let { id -> repository.getAllItems().find { it.id == id } }
@@ -336,14 +562,17 @@ fun VaultScreen(
     // Backup Save Launcher
     var pendingBackupPassphrase by rememberSaveable { mutableStateOf<String?>(null) }
     val backupLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+        contract = SafCreateDocumentContract
     ) { destUri ->
+        vaultViewModel.lastPickerReturnTimestampMs = System.currentTimeMillis()
         onSystemPickerFinished()
         val passphrase = pendingBackupPassphrase
         if (destUri != null && passphrase != null) {
             scope.launch {
                 isLoading = true
-                val outStream = runCatching { context.contentResolver.openOutputStream(destUri) }.getOrNull()
+                val outStream = withContext(Dispatchers.IO) {
+                    runCatching { context.contentResolver.openOutputStream(destUri) }.getOrNull()
+                }
                 if (outStream == null) {
                     isErrorStatus = true
                     statusMessage = "Backup failed: Unable to open destination file."
@@ -370,14 +599,17 @@ fun VaultScreen(
     // Restore File Picker Launcher
     var pendingRestorePassphrase by rememberSaveable { mutableStateOf<String?>(null) }
     val restorePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+        contract = SafOpenSingleDocumentContract
     ) { srcUri ->
+        vaultViewModel.lastPickerReturnTimestampMs = System.currentTimeMillis()
         onSystemPickerFinished()
         val passphrase = pendingRestorePassphrase
         if (srcUri != null && passphrase != null) {
             scope.launch {
                 isLoading = true
-                val inStream = runCatching { context.contentResolver.openInputStream(srcUri) }.getOrNull()
+                val inStream = withContext(Dispatchers.IO) {
+                    runCatching { context.contentResolver.openInputStream(srcUri) }.getOrNull()
+                }
                 if (inStream == null) {
                     isErrorStatus = true
                     statusMessage = "Restore failed: Unable to read selected backup file."
@@ -403,22 +635,13 @@ fun VaultScreen(
     }
 
     fun launchPickerForCurrentCategory() {
-        onSystemPickerLaunched()
-        when (selectedPill) {
-            VaultFilterPill.PHOTOS -> {
-                mediaPickerLauncher.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-            }
-            VaultFilterPill.VIDEOS -> {
-                mediaPickerLauncher.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                )
-            }
-            VaultFilterPill.DOCUMENTS, VaultFilterPill.OTHERS -> {
-                docPickerLauncher.launch(arrayOf("*/*"))
-            }
+        val mimeType = when (selectedPill) {
+            VaultFilterPill.PHOTOS -> "image/*"
+            VaultFilterPill.VIDEOS -> "video/*"
+            VaultFilterPill.DOCUMENTS, VaultFilterPill.OTHERS -> "*/*"
         }
+        onSystemPickerLaunched()
+        docPickerLauncher.launch(SafPickerRequest(primaryMimeType = mimeType))
     }
 
     // Panel 6: Importing Files Fullscreen View
@@ -427,8 +650,7 @@ fun VaultScreen(
             progressPercent = importProgressPercent,
             currentStepIndex = importStepIndex,
             onCancel = {
-                activeImportJob?.cancel()
-                isImporting = false
+                vaultViewModel.cancelActiveImport(onImportInFlightChanged)
             }
         )
         return
@@ -457,7 +679,13 @@ fun VaultScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack, modifier = Modifier.testTag("vault_back_button")) {
+                    IconButton(
+                        onClick = {
+                            vaultViewModel.clearSessionOnExit(onImportInFlightChanged)
+                            onNavigateBack()
+                        },
+                        modifier = Modifier.testTag("vault_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
@@ -499,6 +727,7 @@ fun VaultScreen(
                                 leadingIcon = { Icon(Icons.Default.Security, contentDescription = null) },
                                 onClick = {
                                     showMenu = false
+                                    vaultViewModel.clearSessionOnExit(onImportInFlightChanged)
                                     onOpenDashboard()
                                 }
                             )
@@ -515,10 +744,19 @@ fun VaultScreen(
                 currentTab = MainBottomTab.FILES,
                 onSelectTab = { tab ->
                     when (tab) {
-                        MainBottomTab.HOME -> (onOpenDashboard ?: onNavigateBack)()
-                        MainBottomTab.APPS -> (onNavigateToApps ?: onNavigateBack)()
+                        MainBottomTab.HOME -> {
+                            vaultViewModel.clearSessionOnExit(onImportInFlightChanged)
+                            (onOpenDashboard ?: onNavigateBack)()
+                        }
+                        MainBottomTab.APPS -> {
+                            vaultViewModel.clearSessionOnExit(onImportInFlightChanged)
+                            (onNavigateToApps ?: onNavigateBack)()
+                        }
                         MainBottomTab.FILES -> {}
-                        MainBottomTab.SETTINGS -> (onNavigateToSettings ?: onNavigateBack)()
+                        MainBottomTab.SETTINGS -> {
+                            vaultViewModel.clearSessionOnExit(onImportInFlightChanged)
+                            (onNavigateToSettings ?: onNavigateBack)()
+                        }
                     }
                 }
             )
@@ -792,12 +1030,17 @@ fun VaultScreen(
                         isDestructive = true,
                         shape = NeoShapes.FullPill,
                         onClick = {
-                            repository.deleteItem(item)
+                            val targetItem = item
                             showDeleteConfirmDialog = null
                             selectedItemForDetail = null
-                            refreshItems()
-                            isErrorStatus = false
-                            statusMessage = "Deleted '${item.originalFileName}'"
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    repository.deleteItem(targetItem)
+                                }
+                                refreshItems()
+                                isErrorStatus = false
+                                statusMessage = "Deleted '${targetItem.originalFileName}'"
+                            }
                         }
                     )
                 },
@@ -856,7 +1099,7 @@ fun VaultScreen(
                     showRestoreDialog = false
                     pendingRestorePassphrase = pass
                     onSystemPickerLaunched()
-                    restorePickerLauncher.launch(arrayOf("*/*"))
+                    restorePickerLauncher.launch("*/*")
                 }
             )
         }
@@ -1177,7 +1420,7 @@ private fun VaultGridTile(
 
     LaunchedEffect(item.id) {
         if (item.category == VaultCategory.PICTURE) {
-            bitmap = repository.loadDecryptedBitmap(item)
+            bitmap = repository.loadDecryptedBitmap(item, maxDimension = 384)
         }
     }
 
@@ -1253,7 +1496,7 @@ private fun RecentVaultItemRow(
 
     LaunchedEffect(item.id) {
         if (item.category == VaultCategory.PICTURE) {
-            bitmap = repository.loadDecryptedBitmap(item)
+            bitmap = repository.loadDecryptedBitmap(item, maxDimension = 256)
         }
     }
 
@@ -1352,7 +1595,7 @@ private fun ItemDetailModal(
 
     LaunchedEffect(item.id) {
         if (item.category == VaultCategory.PICTURE) {
-            bitmap = repository.loadDecryptedBitmap(item)
+            bitmap = repository.loadDecryptedBitmap(item, maxDimension = 1024)
             isLoadingBitmap = false
         }
     }

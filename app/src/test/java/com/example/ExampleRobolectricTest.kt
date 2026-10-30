@@ -1,6 +1,8 @@
 package com.example
 
 import android.content.Context
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.core.content.IntentCompat
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.security.AppLockPreferences
@@ -375,9 +377,465 @@ class ExampleRobolectricTest {
         preferences.setDarkThemeOverride(null)
         org.junit.Assert.assertNull(preferences.isDarkThemeOverride())
     }
+
+    @Test
+    fun testVaultSystemPickerLifecycleAndRecreationPreservesVaultScreen() {
+        val savedStateHandle = androidx.lifecycle.SavedStateHandle()
+        val vm1 = MainNavigationViewModel(savedStateHandle)
+
+        // 1. Authenticate and enter Files Vault
+        assertEquals(ScreenState.VAULT_AUTH_GATE, vm1.requestVaultAccess(ScreenState.DASHBOARD))
+        assertEquals(ScreenState.VAULT, vm1.authorizeVaultEntry())
+        assertTrue(vm1.isVaultAuthorized())
+
+        // 2. Launch system file picker from Vault
+        vm1.setSystemPickerActive(true)
+        assertTrue(vm1.isSystemPickerActive())
+        assertTrue(vm1.isSystemPickerOrImportActive())
+        assertTrue(vm1.isVaultAuthorized())
+
+        // 3. Simulate Activity recreation while picker is open or returning
+        val vmRecreated = MainNavigationViewModel(savedStateHandle)
+        assertTrue("Recreated ViewModel must preserve picker-in-flight state", vmRecreated.isSystemPickerActive())
+        assertTrue("Recreated ViewModel must preserve Vault authorization", vmRecreated.isVaultAuthorized())
+        assertEquals(
+            "Recreated Activity must remain on ScreenState.VAULT instead of navigating back",
+            ScreenState.VAULT,
+            vmRecreated.getOrInitScreen { ScreenState.AUTH_GATE }
+        )
+
+        // 4. Simulate picker finishing (either cancelled or with selected files)
+        vmRecreated.setSystemPickerActive(false)
+        assertFalse(vmRecreated.isSystemPickerActive())
+        assertTrue("Grace window must stay active right after picker return", vmRecreated.isSystemPickerOrImportActive())
+        assertTrue("Vault must remain authorized after picker finishes or is cancelled", vmRecreated.isVaultAuthorized())
+        assertEquals(
+            "App must remain on ScreenState.VAULT after picker finishes or is cancelled",
+            ScreenState.VAULT,
+            vmRecreated.getOrInitScreen { ScreenState.AUTH_GATE }
+        )
+
+        // 5. Simulate active file import in flight across recreation
+        vmRecreated.setVaultImportInFlight(true)
+        val vmDuringImport = MainNavigationViewModel(savedStateHandle)
+        assertTrue(vmDuringImport.isVaultImportInFlight())
+        assertTrue(vmDuringImport.isSystemPickerOrImportActive())
+        assertEquals(ScreenState.VAULT, vmDuringImport.getOrInitScreen { ScreenState.AUTH_GATE })
+
+        vmDuringImport.setVaultImportInFlight(false)
+        assertTrue("Vault remains authorized after import completes", vmDuringImport.isVaultAuthorized())
+        assertEquals(ScreenState.VAULT, vmDuringImport.getOrInitScreen { ScreenState.AUTH_GATE })
+    }
+
+    @Test
+    fun testAppLockManagerBypassesSystemFilePickersDuringVaultImport() {
+        val manager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.savePin("1234")
+        preferences.setProtectionEnabled(true)
+
+        // Suppose the user locked a gallery/files app and system picker packages
+        val galleryPkg = "com.sec.android.gallery3d"
+        val docsUiPkg = "com.google.android.documentsui"
+        val mediaModulePkg = "com.google.android.providers.media.module"
+        preferences.addProtectedPackages(listOf(galleryPkg, docsUiPkg, mediaModulePkg))
+
+        // System document/media pickers are never locked even when picker is not in flight
+        manager.setSystemPickerInFlight(false)
+        assertFalse(manager.shouldLock(docsUiPkg))
+        assertFalse(manager.shouldLock(mediaModulePkg))
+
+        // When Vault launches a system picker, even a protected gallery picker is bypassed
+        manager.setSystemPickerInFlight(true)
+        assertTrue(manager.isSystemPickerBypassActive())
+        assertFalse("Protected picker/gallery must not be intercepted during Vault import", manager.shouldLock(galleryPkg))
+
+        // Reset picker state
+        manager.setSystemPickerInFlight(false)
+    }
+
+    @Test
+    fun testSafOpenMultipleDocumentsContractAndResultParsing() {
+        val contract = com.example.ui.vault.SafOpenMultipleDocumentsContract
+
+        // 1. Verify Photos SAF Intent
+        val photoIntent = contract.createIntent(
+            context,
+            com.example.ui.vault.SafPickerRequest(primaryMimeType = "image/*")
+        )
+        assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT, photoIntent.action)
+        assertTrue(photoIntent.hasCategory(android.content.Intent.CATEGORY_OPENABLE))
+        assertEquals("image/*", photoIntent.type)
+        assertTrue(photoIntent.getBooleanExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, false))
+        assertTrue(
+            (photoIntent.flags and android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0
+        )
+        assertTrue(
+            (photoIntent.flags and android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0
+        )
+
+        // 2. Verify Videos SAF Intent
+        val videoIntent = contract.createIntent(
+            context,
+            com.example.ui.vault.SafPickerRequest(primaryMimeType = "video/*")
+        )
+        assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT, videoIntent.action)
+        assertTrue(videoIntent.hasCategory(android.content.Intent.CATEGORY_OPENABLE))
+        assertEquals("video/*", videoIntent.type)
+
+        // 3. Verify Documents / Others SAF Intent
+        val docIntent = contract.createIntent(
+            context,
+            com.example.ui.vault.SafPickerRequest(primaryMimeType = "*/*")
+        )
+        assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT, docIntent.action)
+        assertTrue(docIntent.hasCategory(android.content.Intent.CATEGORY_OPENABLE))
+        assertEquals("*/*", docIntent.type)
+
+        // 4. Verify result parsing for cancellation, single URI, and multiple ClipData URIs
+        assertTrue(contract.parseResult(android.app.Activity.RESULT_CANCELED, null).isEmpty())
+
+        val uri1 = android.net.Uri.parse("content://com.android.providers.media.documents/document/image%3A101")
+        val uri2 = android.net.Uri.parse("content://com.android.providers.media.documents/document/image%3A102")
+
+        val singleResultIntent = android.content.Intent().apply { data = uri1 }
+        assertEquals(listOf(uri1), contract.parseResult(android.app.Activity.RESULT_OK, singleResultIntent))
+
+        val multiResultIntent = android.content.Intent().apply {
+            val clip = android.content.ClipData.newRawUri("files", uri1)
+            clip.addItem(android.content.ClipData.Item(uri2))
+            clipData = clip
+        }
+        assertEquals(listOf(uri1, uri2), contract.parseResult(android.app.Activity.RESULT_OK, multiResultIntent))
+    }
+
+    @Test
+    fun testActualSafPickerLaunchAndResultDeliveryInMainActivity() {
+        preferences.savePin("1234")
+        preferences.setCalculatorDisguiseEnabled(false)
+
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).create().start().resume()
+        val activity = controller.get()
+        val shadowActivity = org.robolectric.Shadows.shadowOf(activity)
+        val navVm = androidx.lifecycle.ViewModelProvider(activity)[MainNavigationViewModel::class.java]
+
+        // Authorize and enter Vault
+        navVm.authorizeVaultEntry()
+        assertEquals(ScreenState.VAULT, navVm.getOrInitScreen { ScreenState.AUTH_GATE })
+
+        val receivedUris = mutableListOf<android.net.Uri>()
+        val launcher = activity.activityResultRegistry.register(
+            "test_vault_saf_picker",
+            com.example.ui.vault.SafOpenMultipleDocumentsContract
+        ) { uris ->
+            navVm.setSystemPickerActive(false)
+            receivedUris.addAll(uris)
+        }
+
+        // Launch picker for Photos ("image/*")
+        navVm.setSystemPickerActive(true)
+        launcher.launch(com.example.ui.vault.SafPickerRequest(primaryMimeType = "image/*"))
+
+        val startedForResult = shadowActivity.nextStartedActivityForResult
+        org.junit.Assert.assertNotNull("SAF picker Intent must be started for result on MainActivity", startedForResult)
+        assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT, startedForResult.intent.action)
+        assertTrue(startedForResult.intent.hasCategory(android.content.Intent.CATEGORY_OPENABLE))
+        assertEquals("image/*", startedForResult.intent.type)
+        assertTrue(startedForResult.intent.getBooleanExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, false))
+
+        // Simulate user cancelling the picker -> stays on VAULT without crashing or losing authorization
+        shadowActivity.receiveResult(
+            startedForResult.intent,
+            android.app.Activity.RESULT_CANCELED,
+            null
+        )
+        assertTrue(receivedUris.isEmpty())
+        assertTrue("Vault must remain authorized after picker cancellation", navVm.isVaultAuthorized())
+        assertEquals(ScreenState.VAULT, navVm.getOrInitScreen { ScreenState.AUTH_GATE })
+
+        // Launch picker for Documents ("*/*") and deliver selected URI
+        navVm.setSystemPickerActive(true)
+        launcher.launch(com.example.ui.vault.SafPickerRequest(primaryMimeType = "*/*"))
+        val docStarted = shadowActivity.nextStartedActivityForResult
+        org.junit.Assert.assertNotNull(docStarted)
+        assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT, docStarted.intent.action)
+        assertTrue(docStarted.intent.hasCategory(android.content.Intent.CATEGORY_OPENABLE))
+        assertEquals("*/*", docStarted.intent.type)
+
+        val pickedDocUri = android.net.Uri.parse("content://com.android.externalstorage.documents/document/primary%3AReport.pdf")
+        shadowActivity.receiveResult(
+            docStarted.intent,
+            android.app.Activity.RESULT_OK,
+            android.content.Intent().apply { data = pickedDocUri }
+        )
+        assertEquals(listOf(pickedDocUri), receivedUris)
+        assertTrue("Vault must remain authorized after picker returns selected file", navVm.isVaultAuthorized())
+        assertEquals(ScreenState.VAULT, navVm.getOrInitScreen { ScreenState.AUTH_GATE })
+
+        launcher.unregister()
+        controller.pause().stop().destroy()
+    }
+
+    @Test
+    fun testFourAuthenticationMethodsSetupAndVerification() {
+        // 1. 4-Digit PIN
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PIN_4, "4826")
+        assertTrue(preferences.isCredentialConfigured())
+        assertEquals(AppLockPreferences.AuthMethod.PIN_4, preferences.getAuthMethod())
+        assertEquals(4, preferences.getPinLength())
+        assertTrue(preferences.verifyCredential("4826"))
+        assertFalse(preferences.verifyCredential("1234"))
+        assertFalse(preferences.verifyCredential("482600"))
+
+        // 2. 6-Digit PIN
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PIN_6, "905173")
+        assertEquals(AppLockPreferences.AuthMethod.PIN_6, preferences.getAuthMethod())
+        assertEquals(6, preferences.getPinLength())
+        assertTrue(preferences.verifyCredential("905173"))
+        assertFalse(preferences.verifyCredential("9051"))
+        assertFalse(preferences.verifyCredential("000000"))
+
+        // 3. Pattern Lock (at least 4 connected dots on 3x3 grid 0..8)
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PATTERN, "0-1-2-5-8")
+        assertEquals(AppLockPreferences.AuthMethod.PATTERN, preferences.getAuthMethod())
+        assertTrue(preferences.verifyCredential("0-1-2-5-8"))
+        assertTrue("Equivalent pattern format must also verify", preferences.verifyCredential("0,1,2,5,8"))
+        assertFalse("Wrong pattern must fail", preferences.verifyCredential("0-3-6-7-8"))
+        assertFalse("Too short pattern (<4 dots) must fail", preferences.verifyCredential("0-1-2"))
+
+        // 4. Password (1..32 characters)
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PASSWORD, "V@ultKey#2026!")
+        assertEquals(AppLockPreferences.AuthMethod.PASSWORD, preferences.getAuthMethod())
+        assertTrue(preferences.verifyCredential("V@ultKey#2026!"))
+        assertFalse("Case-mismatch password must fail", preferences.verifyCredential("v@ultkey#2026!"))
+        assertFalse("Wrong password must fail", preferences.verifyCredential("WrongPassword"))
+    }
+
+    @Test
+    fun testSwitchingAuthenticationMethodsInvalidatesPreviousCredential() {
+        preferences.saveRecoveryQuestion("What city were you born in?", "Lahore")
+        preferences.setBiometricEnabled(true)
+
+        // Start with 4-Digit PIN
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PIN_4, "1357")
+        assertEquals(AppLockPreferences.AuthMethod.PIN_4, preferences.getAuthMethod())
+        assertTrue(preferences.verifyCredential("1357"))
+
+        // Switch to 6-Digit PIN -> old 4-digit PIN must no longer unlock
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PIN_6, "246810")
+        assertEquals(AppLockPreferences.AuthMethod.PIN_6, preferences.getAuthMethod())
+        assertFalse("Old 4-digit PIN must not verify after switching to 6-digit PIN", preferences.verifyCredential("1357"))
+        assertTrue(preferences.verifyCredential("246810"))
+
+        // Switch to Pattern Lock -> old 6-digit PIN must no longer unlock
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PATTERN, "0-4-8-7")
+        assertEquals(AppLockPreferences.AuthMethod.PATTERN, preferences.getAuthMethod())
+        assertFalse("Old 6-digit PIN must not verify after switching to Pattern Lock", preferences.verifyCredential("246810"))
+        assertTrue(preferences.verifyCredential("0-4-8-7"))
+
+        // Switch to Password -> old pattern must no longer unlock
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PASSWORD, "SecureMasterPass99")
+        assertEquals(AppLockPreferences.AuthMethod.PASSWORD, preferences.getAuthMethod())
+        assertFalse("Old pattern must not verify after switching to Password", preferences.verifyCredential("0-4-8-7"))
+        assertTrue(preferences.verifyCredential("SecureMasterPass99"))
+
+        // Verify Biometric and Recovery Question remain intact across method switches
+        assertTrue(preferences.isBiometricEnabled())
+        assertTrue(preferences.hasRecoveryQuestion())
+        assertTrue(preferences.verifyRecoveryAnswer("lahore"))
+    }
+
+    @Test
+    fun testInvalidCredentialValidationRules() {
+        // 4-Digit PIN validation
+        assertTrue(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PIN_4, "0000"))
+        assertFalse(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PIN_4, "123"))
+        assertFalse(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PIN_4, "123456"))
+        assertFalse(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PIN_4, "12a4"))
+
+        // 6-Digit PIN validation
+        assertTrue(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PIN_6, "123456"))
+        assertFalse(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PIN_6, "1234"))
+        assertFalse(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PIN_6, "12345a"))
+
+        // Pattern Lock validation (min 4 distinct dots in 0..8)
+        assertTrue(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PATTERN, "0-1-2-5"))
+        assertFalse("3 dots must be rejected", AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PATTERN, "0-1-2"))
+        assertFalse("Duplicate dots must be rejected", AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PATTERN, "0-1-2-1"))
+        assertFalse("Out of range dot must be rejected", AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PATTERN, "0-1-2-9"))
+
+        // Password validation (1..32 chars)
+        assertTrue(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PASSWORD, "a"))
+        assertTrue(AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PASSWORD, "A".repeat(32)))
+        assertFalse("Empty password must be rejected", AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PASSWORD, ""))
+        assertFalse("33-char password must be rejected", AppLockPreferences.isValidCredential(AppLockPreferences.AuthMethod.PASSWORD, "A".repeat(33)))
+    }
+
+    @Test
+    fun testStartupLogoSplashRemovedAndDirectAuthFlow() {
+        // Verify transparent splash icon drawable resolves for Android 12+ system splash suppression
+        val transparentSplash = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_splash_transparent)
+        org.junit.Assert.assertNotNull("ic_splash_transparent drawable must resolve", transparentSplash)
+
+        // Verify MainActivity starts directly in AUTH_GATE when credential is configured
+        preferences.saveAuthCredential(AppLockPreferences.AuthMethod.PATTERN, "0-1-2-5")
+        preferences.setCalculatorDisguiseEnabled(false)
+
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).create().start().resume()
+        val activity = controller.get()
+        val navVm = androidx.lifecycle.ViewModelProvider(activity)[MainNavigationViewModel::class.java]
+
+        assertEquals(
+            "MainActivity must open directly into AUTH_GATE without startup splash delay",
+            ScreenState.AUTH_GATE,
+            navVm.getOrInitScreen { ScreenState.ONBOARDING }
+        )
+        assertEquals(AppLockPreferences.AuthMethod.PATTERN, preferences.getAuthMethod())
+
+        controller.pause().stop().destroy()
+    }
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    private fun androidx.compose.ui.test.ComposeUiTest.drawPatternOnGrid(dotIndices: List<Int>) {
+        val gridInteraction = onNode(
+            androidx.compose.ui.test.hasTestTag("pattern_lock_grid")
+        )
+        val bounds = gridInteraction.fetchSemanticsNode().boundsInRoot
+        val width = bounds.width
+        val height = bounds.height
+
+        fun dotOffset(index: Int): androidx.compose.ui.geometry.Offset {
+            val row = index / 3
+            val col = index % 3
+            val cellW = width / 3f
+            val cellH = height / 3f
+            return androidx.compose.ui.geometry.Offset(
+                x = col * cellW + cellW / 2f,
+                y = row * cellH + cellH / 2f
+            )
+        }
+
+        gridInteraction.performTouchInput {
+            val first = dotOffset(dotIndices.first())
+            down(first)
+            for (i in 1 until dotIndices.size) {
+                val target = dotOffset(dotIndices[i])
+                moveTo(target)
+            }
+            up()
+        }
+        waitForIdle()
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    fun testPatternLockSetupConfirmationMismatchRetryAndAppRestart() {
+        var dialogCompletedCount = 0
+        val showDialog = androidx.compose.runtime.mutableStateOf(true)
+        val dialogInstanceKey = androidx.compose.runtime.mutableIntStateOf(0)
+
+        androidx.compose.ui.test.runComposeUiTest {
+            setContent {
+                if (showDialog.value) {
+                    androidx.compose.runtime.key(dialogInstanceKey.intValue) {
+                        com.example.ui.screens.ChangePinDialog(
+                            preferences = preferences,
+                            onDismiss = { showDialog.value = false },
+                            onSuccess = {
+                                dialogCompletedCount++
+                            }
+                        )
+                    }
+                }
+            }
+            waitForIdle()
+
+            // === PART A: First-time Pattern Lock setup + <4 dot validation + immediate matching confirmation ===
+            onNode(androidx.compose.ui.test.hasTestTag("auth_method_option_PATTERN"))
+                .performClick()
+            waitForIdle()
+
+            onNode(androidx.compose.ui.test.hasText("Create Pattern Lock"))
+                .assertExists()
+
+            // 1. Minimum 4-dot validation: drawing only 3 dots (0 -> 1 -> 2) shows error and stays on Create step
+            drawPatternOnGrid(listOf(0, 1, 2))
+            onNode(androidx.compose.ui.test.hasText("Connect at least 4 dots"))
+                .assertExists()
+            onNode(androidx.compose.ui.test.hasText("Create Pattern Lock"))
+                .assertExists()
+
+            // 2. First valid draw (0 -> 1 -> 2 -> 5): saves temporarily and transitions to Confirm Pattern Lock
+            drawPatternOnGrid(listOf(0, 1, 2, 5))
+            onNode(androidx.compose.ui.test.hasText("Confirm Pattern Lock"))
+                .assertExists()
+
+            // 3. Second matching draw (0 -> 1 -> 2 -> 5): immediately accepted on first confirmation without asking again
+            drawPatternOnGrid(listOf(0, 1, 2, 5))
+            onNode(androidx.compose.ui.test.hasText("Pattern Lock saved successfully!"))
+                .assertExists()
+            onNode(androidx.compose.ui.test.hasTestTag("change_auth_done_button"))
+                .performClick()
+            waitForIdle()
+
+            assertEquals(1, dialogCompletedCount)
+            assertEquals(AppLockPreferences.AuthMethod.PATTERN, preferences.getAuthMethod())
+            assertTrue("Saved pattern 0-1-2-5 must verify", preferences.verifyCredential("0-1-2-5"))
+            assertFalse("Different pattern must not verify", preferences.verifyCredential("0-3-6-7"))
+
+            // === PART B: Re-open dialog -> Verify current pattern -> Mismatch confirmation -> Retry confirmation ===
+            dialogInstanceKey.intValue++
+            waitForIdle()
+
+            onNode(androidx.compose.ui.test.hasTestTag("auth_method_option_PATTERN"))
+                .performClick()
+            waitForIdle()
+
+            // Verify existing pattern (0 -> 1 -> 2 -> 5)
+            onNode(androidx.compose.ui.test.hasText("Verify Current Pattern Lock"))
+                .assertExists()
+            drawPatternOnGrid(listOf(0, 1, 2, 5))
+            onNode(androidx.compose.ui.test.hasText("Create Pattern Lock"))
+                .assertExists()
+
+            // First draw of new pattern: 0 -> 3 -> 6 -> 7 -> 8
+            drawPatternOnGrid(listOf(0, 3, 6, 7, 8))
+            onNode(androidx.compose.ui.test.hasText("Confirm Pattern Lock"))
+                .assertExists()
+
+            // Second draw with MISMATCHING pattern: 0 -> 1 -> 2 -> 5
+            drawPatternOnGrid(listOf(0, 1, 2, 5))
+            onNode(androidx.compose.ui.test.hasText("Patterns do not match. Try again."))
+                .assertExists()
+            onNode(androidx.compose.ui.test.hasText("Confirm Pattern Lock"))
+                .assertExists()
+            assertTrue("Previous pattern must remain active before confirmation succeeds", preferences.verifyCredential("0-1-2-5"))
+
+            // Retry confirmation with matching pattern: 0 -> 3 -> 6 -> 7 -> 8
+            drawPatternOnGrid(listOf(0, 3, 6, 7, 8))
+            onNode(androidx.compose.ui.test.hasText("Pattern Lock saved successfully!"))
+                .assertExists()
+            onNode(androidx.compose.ui.test.hasTestTag("change_auth_done_button"))
+                .performClick()
+            showDialog.value = false
+            waitForIdle()
+        }
+
+        assertEquals(2, dialogCompletedCount)
+
+        // === PART C: Simulate closing and reopening the app (MainActivity) and verifying the saved pattern ===
+        preferences.setCalculatorDisguiseEnabled(false)
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).create().start().resume()
+        val activity = controller.get()
+        val navVm = androidx.lifecycle.ViewModelProvider(activity)[MainNavigationViewModel::class.java]
+
+        assertEquals(ScreenState.AUTH_GATE, navVm.getOrInitScreen { ScreenState.ONBOARDING })
+        assertEquals(AppLockPreferences.AuthMethod.PATTERN, preferences.getAuthMethod())
+        assertTrue("Updated pattern must verify after reopening app", preferences.verifyCredential("0-3-6-7-8"))
+        assertFalse("Old pattern must be rejected after reopening app", preferences.verifyCredential("0-1-2-5"))
+
+        activity.setContentView(android.view.View(activity))
+        controller.pause().stop().destroy()
+    }
 }
-
-
 
 
 

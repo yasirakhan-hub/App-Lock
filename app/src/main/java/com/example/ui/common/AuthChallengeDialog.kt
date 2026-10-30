@@ -29,18 +29,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import com.example.data.security.AppLockPreferences
+import com.example.data.security.AppLockPreferences.AuthMethod
 import com.example.util.BiometricHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Centralized, reusable authentication dialog providing BiometricPrompt with PIN fallback.
+ * Centralized, reusable authentication dialog providing BiometricPrompt and dynamic
+ * support for all 4 authentication methods (4-Digit PIN, 6-Digit PIN, Pattern Lock, Password).
  * Styled in Black & Gold Neomorphism.
  */
 @Composable
 fun AuthChallengeDialog(
     title: String,
-    subtitle: String = "Use fingerprint or enter your master PIN to confirm",
+    subtitle: String = "Use fingerprint or enter your master credential to confirm",
     preferences: AppLockPreferences,
     onAuthorized: () -> Unit,
     onDismiss: () -> Unit
@@ -48,9 +50,14 @@ fun AuthChallengeDialog(
     val context = LocalContext.current
     val activity = context as? FragmentActivity
     val scope = rememberCoroutineScope()
-    val pinLength = preferences.getPinLength()
+    val authMethod = remember(preferences) { preferences.getAuthMethod() }
+    val pinLength = when (authMethod) {
+        AuthMethod.PIN_6 -> 6
+        else -> preferences.getPinLength()
+    }
 
     var enteredPin by remember { mutableStateOf("") }
+    var enteredPassword by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var lockoutSeconds by remember { mutableIntStateOf(preferences.getRemainingLockoutSeconds()) }
@@ -60,24 +67,42 @@ fun AuthChallengeDialog(
     }
     val isBiometricEnabled = isBiometricSupported && preferences.isBiometricEnabled()
 
+    val negativeBtnLabel = when (authMethod) {
+        AuthMethod.PIN_4, AuthMethod.PIN_6 -> "Use PIN"
+        AuthMethod.PATTERN -> "Use Pattern"
+        AuthMethod.PASSWORD -> "Use Password"
+    }
+
     fun triggerBiometric() {
         if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
             BiometricHelper.showBiometricPrompt(
                 activity = activity,
                 title = title,
                 subtitle = subtitle,
-                negativeButtonText = "Use PIN",
+                negativeButtonText = negativeBtnLabel,
                 onSuccess = {
+                    preferences.resetFailedAttempts()
                     onAuthorized()
                 },
                 onError = { errorCode, _ ->
                     if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
                         errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
                     ) {
-                        errorMsg = "Fingerprint sensor locked. Please use PIN."
+                        errorMsg = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
                     }
                 }
             )
+        }
+    }
+
+    fun handleFailedAttempt(customIncorrectMessage: String) {
+        isError = true
+        preferences.recordFailedAttempt()
+        lockoutSeconds = preferences.getRemainingLockoutSeconds()
+        errorMsg = if (lockoutSeconds > 0) {
+            "Locked out for $lockoutSeconds seconds"
+        } else {
+            customIncorrectMessage
         }
     }
 
@@ -124,84 +149,176 @@ fun AuthChallengeDialog(
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                PinDots(
-                    pinLength = pinLength,
-                    enteredLength = enteredPin.length,
-                    isError = isError
-                )
+                when (authMethod) {
+                    AuthMethod.PIN_4, AuthMethod.PIN_6 -> {
+                        PinDots(
+                            pinLength = pinLength,
+                            enteredLength = enteredPin.length,
+                            isError = isError
+                        )
 
-                if (errorMsg != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = errorMsg ?: "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = NeoPalette.ErrorRed,
-                        textAlign = TextAlign.Center
-                    )
-                }
+                        if (errorMsg != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = errorMsg ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NeoPalette.ErrorRed,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.testTag("auth_challenge_error_text")
+                            )
+                        }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
-                PinKeypad(
-                    buttonSize = 62.dp,
-                    onDigitClick = { digit ->
-                        if (lockoutSeconds > 0) return@PinKeypad
-                        if (enteredPin.length < pinLength) {
-                            val next = enteredPin + digit
-                            enteredPin = next
-                            isError = false
-                            errorMsg = null
+                        PinKeypad(
+                            buttonSize = 62.dp,
+                            onDigitClick = { digit ->
+                                if (lockoutSeconds > 0) return@PinKeypad
+                                if (enteredPin.length < pinLength) {
+                                    val next = enteredPin + digit
+                                    enteredPin = next
+                                    isError = false
+                                    errorMsg = null
 
-                            if (next.length == pinLength) {
-                                scope.launch {
-                                    if (preferences.verifyPin(next)) {
-                                        preferences.resetFailedAttempts()
-                                        onAuthorized()
-                                    } else {
-                                        isError = true
-                                        preferences.recordFailedAttempt()
-                                        lockoutSeconds = preferences.getRemainingLockoutSeconds()
-                                        errorMsg = if (lockoutSeconds > 0) {
-                                            "Locked out for $lockoutSeconds seconds"
-                                        } else {
-                                            "Incorrect PIN"
+                                    if (next.length == pinLength) {
+                                        scope.launch {
+                                            if (preferences.verifyCredential(next)) {
+                                                preferences.resetFailedAttempts()
+                                                onAuthorized()
+                                            } else {
+                                                handleFailedAttempt("Incorrect PIN")
+                                                delay(300L)
+                                                enteredPin = ""
+                                            }
                                         }
-                                        delay(300L)
-                                        enteredPin = ""
+                                    }
+                                }
+                            },
+                            onDeleteClick = {
+                                if (lockoutSeconds > 0) return@PinKeypad
+                                if (enteredPin.isNotEmpty()) {
+                                    enteredPin = enteredPin.dropLast(1)
+                                    isError = false
+                                    errorMsg = null
+                                }
+                            },
+                            lockoutSeconds = lockoutSeconds,
+                            extraLeftAction = {
+                                if (isBiometricEnabled) {
+                                    NeoCircularButton(
+                                        onClick = { triggerBiometric() },
+                                        size = 58.dp,
+                                        isGoldSolid = true,
+                                        modifier = Modifier.testTag("auth_challenge_biometric_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Fingerprint,
+                                            contentDescription = "Authenticate with Fingerprint",
+                                            tint = NeoPalette.TextInverse,
+                                            modifier = Modifier.size(28.dp)
+                                        )
                                     }
                                 }
                             }
+                        )
+                    }
+
+                    AuthMethod.PATTERN -> {
+                        if (errorMsg != null) {
+                            Text(
+                                text = errorMsg ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NeoPalette.ErrorRed,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.testTag("auth_challenge_error_text")
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
-                    },
-                    onDeleteClick = {
-                        if (lockoutSeconds > 0) return@PinKeypad
-                        if (enteredPin.isNotEmpty()) {
-                            enteredPin = enteredPin.dropLast(1)
-                            isError = false
-                            errorMsg = null
-                        }
-                    },
-                    lockoutSeconds = lockoutSeconds,
-                    extraLeftAction = {
-                        if (isBiometricEnabled) {
-                            NeoCircularButton(
-                                onClick = { triggerBiometric() },
-                                size = 58.dp,
-                                isGoldSolid = true,
-                                modifier = Modifier.testTag("auth_challenge_biometric_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Fingerprint,
-                                    contentDescription = "Authenticate with Fingerprint",
-                                    tint = NeoPalette.TextInverse,
-                                    modifier = Modifier.size(28.dp)
-                                )
+
+                        PatternLockGrid(
+                            enabled = lockoutSeconds == 0,
+                            isError = isError,
+                            gridSize = 216.dp,
+                            onPatternStart = {
+                                isError = false
+                                errorMsg = null
+                            },
+                            onPatternTooShort = {
+                                isError = true
+                                errorMsg = "Connect at least 4 dots"
+                            },
+                            onPatternComplete = { pattern ->
+                                if (lockoutSeconds > 0) return@PatternLockGrid
+                                if (preferences.verifyCredential(pattern)) {
+                                    preferences.resetFailedAttempts()
+                                    onAuthorized()
+                                } else {
+                                    handleFailedAttempt("Incorrect pattern")
+                                }
                             }
+                        )
+
+                        if (isBiometricEnabled) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            BiometricActionRow(
+                                onBiometricClick = { triggerBiometric() },
+                                enabled = lockoutSeconds == 0,
+                                testTag = "auth_challenge_biometric_button"
+                            )
                         }
                     }
-                )
+
+                    AuthMethod.PASSWORD -> {
+                        if (errorMsg != null) {
+                            Text(
+                                text = errorMsg ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NeoPalette.ErrorRed,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.testTag("auth_challenge_error_text")
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        PasswordAuthInput(
+                            value = enteredPassword,
+                            onValueChange = {
+                                enteredPassword = it
+                                isError = false
+                                errorMsg = null
+                            },
+                            enabled = lockoutSeconds == 0,
+                            isError = isError,
+                            submitButtonText = "Verify Password",
+                            onSubmit = {
+                                if (lockoutSeconds > 0) return@PasswordAuthInput
+                                if (enteredPassword.isEmpty()) {
+                                    isError = true
+                                    errorMsg = "Password cannot be empty"
+                                    return@PasswordAuthInput
+                                }
+                                if (preferences.verifyCredential(enteredPassword)) {
+                                    preferences.resetFailedAttempts()
+                                    onAuthorized()
+                                } else {
+                                    handleFailedAttempt("Incorrect password")
+                                    enteredPassword = ""
+                                }
+                            }
+                        )
+
+                        if (isBiometricEnabled) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            BiometricActionRow(
+                                onBiometricClick = { triggerBiometric() },
+                                enabled = lockoutSeconds == 0,
+                                testTag = "auth_challenge_biometric_button"
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {},

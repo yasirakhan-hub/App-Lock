@@ -261,4 +261,68 @@ class VaultCryptoTest {
         assertEquals(ScreenState.VAULT, vm2.getOrInitScreen { ScreenState.AUTH_GATE })
         assertTrue(vm2.getOpenedCalcFromDashboard())
     }
+
+    @Test
+    fun testDocumentVideoImageAndLargeFileImportsWithDownsampledPreview() = runBlocking {
+        val repository = VaultRepository(context)
+
+        // 1. High-resolution PNG Image import + downsampled bitmap decoding
+        val imageFile = File(context.cacheDir, "high_res_photo.png")
+        val rawBitmap = android.graphics.Bitmap.createBitmap(1600, 1200, android.graphics.Bitmap.Config.ARGB_8888)
+        rawBitmap.eraseColor(android.graphics.Color.BLUE)
+        java.io.FileOutputStream(imageFile).use { out ->
+            rawBitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+        }
+        val imageResult = repository.importFromUri(
+            uri = Uri.fromFile(imageFile),
+            fallbackCategory = VaultCategory.PICTURE
+        )
+        assertTrue("Image import must succeed", imageResult.isSuccess)
+        val imageItem = imageResult.getOrThrow()
+        assertEquals(VaultCategory.PICTURE, imageItem.category)
+
+        val previewBitmap = repository.loadDecryptedBitmap(imageItem, maxDimension = 384)
+        assertNotNull("Decrypted downsampled bitmap must not be null", previewBitmap)
+        assertTrue("Downsampled width must fit within 384px", previewBitmap!!.width <= 384)
+        assertTrue("Downsampled height must fit within 384px", previewBitmap.height <= 384)
+
+        // 2. Large Video file streaming import (2.5 MB multi-chunk payload)
+        val videoFile = File(context.cacheDir, "large_recording.mp4")
+        val chunk = ByteArray(64 * 1024) { idx -> (idx % 251).toByte() }
+        val totalChunks = 40 // 2.5 MB
+        java.io.FileOutputStream(videoFile).use { out ->
+            repeat(totalChunks) {
+                out.write(chunk)
+            }
+        }
+        val expectedVideoSize = videoFile.length()
+        val videoResult = repository.importFromUri(
+            uri = Uri.fromFile(videoFile),
+            fallbackCategory = VaultCategory.VIDEO
+        )
+        assertTrue("Large video import must succeed", videoResult.isSuccess)
+        val videoItem = videoResult.getOrThrow()
+        assertEquals(VaultCategory.VIDEO, videoItem.category)
+        assertEquals(expectedVideoSize, videoItem.fileSizeRaw)
+
+        // Export and verify byte size matches 100%
+        val exportedVideoFile = File(context.cacheDir, "exported_recording.mp4")
+        val exportRes = repository.exportItemToUri(videoItem, Uri.fromFile(exportedVideoFile))
+        assertTrue("Exporting large video must succeed", exportRes.isSuccess)
+        assertEquals(expectedVideoSize, exportedVideoFile.length())
+
+        // 3. Extensionless picker URI using fallbackCategory (e.g. Android PhotoPicker content://media/picker/0/10000123)
+        val pickerTempFile = File(context.cacheDir, "10000123").apply {
+            writeBytes(ByteArray(4096) { (it % 127).toByte() })
+        }
+        val fallbackVideoResult = repository.importFromUri(
+            uri = Uri.fromFile(pickerTempFile),
+            fallbackCategory = VaultCategory.VIDEO
+        )
+        assertTrue("Extensionless video URI with fallbackCategory must succeed", fallbackVideoResult.isSuccess)
+        assertEquals(VaultCategory.VIDEO, fallbackVideoResult.getOrThrow().category)
+
+        assertEquals(1, repository.getItemCount(VaultCategory.PICTURE))
+        assertEquals(2, repository.getItemCount(VaultCategory.VIDEO))
+    }
 }

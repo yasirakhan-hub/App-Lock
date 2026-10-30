@@ -50,12 +50,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.repository.AppLockManager
+import com.example.data.security.AppLockPreferences.AuthMethod
 import com.example.ui.calculator.CalculatorVaultScreen
+import com.example.ui.common.BiometricActionRow
 import com.example.ui.common.MainBottomTab
 import com.example.ui.common.NeoBottomNavigationBar
 import com.example.ui.common.NeoCircularButton
 import com.example.ui.common.NeoGoldPadlockEmblem
 import com.example.ui.common.NeoPalette
+import com.example.ui.common.PasswordAuthInput
+import com.example.ui.common.PatternLockGrid
 import com.example.ui.common.PinDots
 import com.example.ui.common.PinKeypad
 import com.example.ui.screens.AppSelectionScreen
@@ -92,6 +96,10 @@ class MainNavigationViewModel(private val savedStateHandle: SavedStateHandle) : 
         private const val KEY_VAULT_RETURN_SCREEN = "nav_vault_return_screen"
         private const val KEY_VAULT_AUTHORIZED = "nav_vault_authorized"
         private const val KEY_APP_MGMT_AUTHORIZED = "nav_app_mgmt_authorized"
+        private const val KEY_SYSTEM_PICKER_IN_FLIGHT = "nav_system_picker_in_flight"
+        private const val KEY_VAULT_IMPORT_IN_FLIGHT = "nav_vault_import_in_flight"
+        private const val KEY_LAST_PICKER_EVENT_TIME = "nav_last_picker_event_time"
+        private const val PICKER_RETURN_GRACE_MS = 3000L
     }
 
     private var isSystemPickerInFlight: Boolean = false
@@ -125,6 +133,9 @@ class MainNavigationViewModel(private val savedStateHandle: SavedStateHandle) : 
             // Leaving VAULT immediately locks the vault session
             savedStateHandle[KEY_VAULT_AUTHORIZED] = false
             isSystemPickerInFlight = false
+            savedStateHandle[KEY_SYSTEM_PICKER_IN_FLIGHT] = false
+            savedStateHandle[KEY_VAULT_IMPORT_IN_FLIGHT] = false
+            savedStateHandle[KEY_LAST_PICKER_EVENT_TIME] = 0L
         }
         if (screen != ScreenState.APP_SELECTION) {
             // Leaving APP_SELECTION immediately ends the authenticated app-management session
@@ -141,6 +152,9 @@ class MainNavigationViewModel(private val savedStateHandle: SavedStateHandle) : 
         savedStateHandle[KEY_VAULT_AUTHORIZED] = false
         savedStateHandle[KEY_APP_MGMT_AUTHORIZED] = false
         isSystemPickerInFlight = false
+        savedStateHandle[KEY_SYSTEM_PICKER_IN_FLIGHT] = false
+        savedStateHandle[KEY_VAULT_IMPORT_IN_FLIGHT] = false
+        savedStateHandle[KEY_LAST_PICKER_EVENT_TIME] = 0L
         val safeReturn = if (returnScreen == ScreenState.VAULT || returnScreen == ScreenState.VAULT_AUTH_GATE) {
             ScreenState.DASHBOARD
         } else {
@@ -166,13 +180,17 @@ class MainNavigationViewModel(private val savedStateHandle: SavedStateHandle) : 
     fun lockVaultSession() {
         savedStateHandle[KEY_VAULT_AUTHORIZED] = false
         isSystemPickerInFlight = false
+        savedStateHandle[KEY_SYSTEM_PICKER_IN_FLIGHT] = false
+        savedStateHandle[KEY_VAULT_IMPORT_IN_FLIGHT] = false
+        savedStateHandle[KEY_LAST_PICKER_EVENT_TIME] = 0L
         if (savedStateHandle.get<String>(KEY_CURRENT_SCREEN) == ScreenState.VAULT.name) {
             savedStateHandle[KEY_CURRENT_SCREEN] = ScreenState.VAULT_AUTH_GATE.name
         }
     }
 
     fun isVaultAuthorized(): Boolean =
-        (savedStateHandle.get<Boolean>(KEY_VAULT_AUTHORIZED) == true) || isSystemPickerInFlight
+        (savedStateHandle.get<Boolean>(KEY_VAULT_AUTHORIZED) == true) ||
+                isSystemPickerOrImportActive()
 
     /**
      * Session-scoped authorization for the Protected-App Management flow ([ScreenState.APP_SELECTION]).
@@ -191,9 +209,40 @@ class MainNavigationViewModel(private val savedStateHandle: SavedStateHandle) : 
 
     fun setSystemPickerActive(active: Boolean) {
         isSystemPickerInFlight = active
+        savedStateHandle[KEY_SYSTEM_PICKER_IN_FLIGHT] = active
+        savedStateHandle[KEY_LAST_PICKER_EVENT_TIME] = System.currentTimeMillis()
+        if (active) {
+            savedStateHandle[KEY_VAULT_AUTHORIZED] = true
+            savedStateHandle[KEY_CURRENT_SCREEN] = ScreenState.VAULT.name
+        } else if (savedStateHandle.get<String>(KEY_CURRENT_SCREEN) == ScreenState.VAULT.name) {
+            // Returning from system picker to Vault: keep Vault session authorized
+            savedStateHandle[KEY_VAULT_AUTHORIZED] = true
+        }
     }
 
-    fun isSystemPickerActive(): Boolean = isSystemPickerInFlight
+    fun isSystemPickerActive(): Boolean =
+        isSystemPickerInFlight || (savedStateHandle.get<Boolean>(KEY_SYSTEM_PICKER_IN_FLIGHT) == true)
+
+    fun setVaultImportInFlight(inFlight: Boolean) {
+        savedStateHandle[KEY_VAULT_IMPORT_IN_FLIGHT] = inFlight
+        if (inFlight) {
+            savedStateHandle[KEY_VAULT_AUTHORIZED] = true
+            savedStateHandle[KEY_CURRENT_SCREEN] = ScreenState.VAULT.name
+        }
+    }
+
+    fun isVaultImportInFlight(): Boolean =
+        savedStateHandle.get<Boolean>(KEY_VAULT_IMPORT_IN_FLIGHT) == true
+
+    fun isWithinPickerGraceWindow(): Boolean {
+        val lastTime = savedStateHandle.get<Long>(KEY_LAST_PICKER_EVENT_TIME) ?: 0L
+        if (lastTime <= 0L) return false
+        val elapsed = System.currentTimeMillis() - lastTime
+        return elapsed in 0L..PICKER_RETURN_GRACE_MS
+    }
+
+    fun isSystemPickerOrImportActive(): Boolean =
+        isSystemPickerActive() || isVaultImportInFlight() || isWithinPickerGraceWindow()
 
     fun getVaultReturnScreen(): ScreenState {
         val name = savedStateHandle.get<String>(KEY_VAULT_RETURN_SCREEN)
@@ -218,6 +267,14 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         appLockManager = AppLockManager.getInstance(this)
         val navViewModel = ViewModelProvider(this)[MainNavigationViewModel::class.java]
+        val prefs = appLockManager.preferences
+        navViewModel.getOrInitScreen {
+            when {
+                !prefs.isPinConfigured() -> ScreenState.ONBOARDING
+                prefs.isCalculatorDisguiseEnabled() -> ScreenState.CALCULATOR_GATEWAY
+                else -> ScreenState.AUTH_GATE
+            }
+        }
 
         setContent {
             var darkThemeOverride by rememberSaveable {
@@ -259,19 +316,10 @@ fun MainAppNavHost(
     val context = LocalContext.current
     val prefs = appLockManager.preferences
 
-    var showOpeningSplash by rememberSaveable { mutableStateOf(true) }
-
-    LaunchedEffect(showOpeningSplash) {
-        if (showOpeningSplash) {
-            delay(850L)
-            showOpeningSplash = false
-        }
-    }
-
-    var isVaultAuthorizedLocal by remember {
+    var isVaultAuthorizedLocal by rememberSaveable {
         mutableStateOf(navViewModel?.isVaultAuthorized() ?: false)
     }
-    var isAppMgmtAuthorizedLocal by remember {
+    var isAppMgmtAuthorizedLocal by rememberSaveable {
         mutableStateOf(navViewModel?.isAppManagementAuthorized() ?: false)
     }
     var isSystemPickerActiveLocal by rememberSaveable {
@@ -321,6 +369,7 @@ fun MainAppNavHost(
             // Leaving VAULT immediately locks the vault session
             isVaultAuthorizedLocal = false
             isSystemPickerActiveLocal = false
+            appLockManager.setSystemPickerInFlight(false)
             navViewModel?.lockVaultSession()
         }
 
@@ -332,6 +381,7 @@ fun MainAppNavHost(
         isVaultAuthorizedLocal = false
         isAppMgmtAuthorizedLocal = false
         isSystemPickerActiveLocal = false
+        appLockManager.setSystemPickerInFlight(false)
         navViewModel?.lockAppManagementSession()
         val safeReturn = if (fromScreen == ScreenState.VAULT || fromScreen == ScreenState.VAULT_AUTH_GATE) {
             ScreenState.DASHBOARD
@@ -358,9 +408,11 @@ fun MainAppNavHost(
             if (event == Lifecycle.Event.ON_STOP) {
                 val activity = context as? android.app.Activity
                 val isChangingConfigs = activity?.isChangingConfigurations == true
-                val pickerInFlight = (navViewModel?.isSystemPickerActive() == true) || isSystemPickerActiveLocal
+                val pickerOrImportInFlight = (navViewModel?.isSystemPickerOrImportActive() == true) ||
+                        isSystemPickerActiveLocal ||
+                        appLockManager.isSystemPickerBypassActive()
 
-                if (!isChangingConfigs && !pickerInFlight) {
+                if (!isChangingConfigs && !pickerOrImportInFlight) {
                     val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
                     val isScreenOff = powerManager != null && !powerManager.isInteractive
 
@@ -391,13 +443,6 @@ fun MainAppNavHost(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
-    }
-
-    if (showOpeningSplash) {
-        OpeningSplashScreen(
-            onSplashComplete = { showOpeningSplash = false }
-        )
-        return
     }
 
     AnimatedContent(
@@ -537,7 +582,8 @@ fun MainAppNavHost(
             ScreenState.VAULT -> {
                 val isAuthorized = (navViewModel?.isVaultAuthorized() == true) ||
                         isVaultAuthorizedLocal ||
-                        isSystemPickerActiveLocal
+                        isSystemPickerActiveLocal ||
+                        appLockManager.isSystemPickerBypassActive()
 
                 if (currentScreen == ScreenState.VAULT && !isAuthorized) {
                     // Fail-safe guard: only redirect if VAULT is the active target screen and unauthorized.
@@ -551,19 +597,28 @@ fun MainAppNavHost(
                     val returnScreen = vaultReturnScreen.takeIf {
                         it != ScreenState.VAULT && it != ScreenState.VAULT_AUTH_GATE
                     } ?: ScreenState.DASHBOARD
-                    BackHandler { navigateTo(returnScreen, calcFromDashboard = false) }
                     VaultScreen(
                         onNavigateBack = { navigateTo(returnScreen, calcFromDashboard = false) },
                         onOpenDashboard = { navigateTo(ScreenState.DASHBOARD, calcFromDashboard = false) },
                         onNavigateToApps = { navigateTo(ScreenState.APP_SELECTION, calcFromDashboard = false) },
                         onNavigateToSettings = { navigateTo(ScreenState.SETTINGS, calcFromDashboard = false) },
                         onSystemPickerLaunched = {
+                            isVaultAuthorizedLocal = true
                             isSystemPickerActiveLocal = true
+                            appLockManager.setSystemPickerInFlight(true)
                             navViewModel?.setSystemPickerActive(true)
                         },
                         onSystemPickerFinished = {
+                            isVaultAuthorizedLocal = true
                             isSystemPickerActiveLocal = false
+                            appLockManager.setSystemPickerInFlight(false)
                             navViewModel?.setSystemPickerActive(false)
+                        },
+                        onImportInFlightChanged = { inFlight ->
+                            if (inFlight) {
+                                isVaultAuthorizedLocal = true
+                            }
+                            navViewModel?.setVaultImportInFlight(inFlight)
                         }
                     )
                 }
@@ -636,7 +691,8 @@ fun OpeningSplashScreen(
 }
 
 /**
- * Gatekeeper requiring master PIN or Biometric to open Smart AppLock or the Private File Vault.
+ * Gatekeeper requiring master credential (4-Digit PIN, 6-Digit PIN, Pattern Lock, or Password)
+ * or Biometric to open Smart AppLock or the Private File Vault.
  * Matches Panel 2 of the Black & Gold Neomorphism reference image.
  */
 @Composable
@@ -651,10 +707,28 @@ fun DashboardAuthGate(
     val context = LocalContext.current
     val activity = context as? FragmentActivity
     val prefs = appLockManager.preferences
-    val pinLength = prefs.getPinLength()
+    val authMethod = remember(prefs) { prefs.getAuthMethod() }
+    val pinLength = when (authMethod) {
+        AuthMethod.PIN_6 -> 6
+        else -> prefs.getPinLength()
+    }
     val scope = rememberCoroutineScope()
 
+    val resolvedTitle = remember(title, authMethod) {
+        if (title == "Enter PIN") {
+            when (authMethod) {
+                AuthMethod.PIN_4 -> "Enter 4-Digit PIN"
+                AuthMethod.PIN_6 -> "Enter 6-Digit PIN"
+                AuthMethod.PATTERN -> "Draw Pattern"
+                AuthMethod.PASSWORD -> "Enter Password"
+            }
+        } else {
+            title
+        }
+    }
+
     var enteredPin by remember { mutableStateOf("") }
+    var enteredPassword by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var lockoutSeconds by remember { mutableIntStateOf(prefs.getRemainingLockoutSeconds()) }
@@ -664,13 +738,19 @@ fun DashboardAuthGate(
     }
     val isBiometricEnabled = isBiometricSupported && prefs.isBiometricEnabled()
 
+    val negativeButtonLabel = when (authMethod) {
+        AuthMethod.PIN_4, AuthMethod.PIN_6 -> "Use PIN"
+        AuthMethod.PATTERN -> "Use Pattern"
+        AuthMethod.PASSWORD -> "Use Password"
+    }
+
     fun triggerBiometricPrompt() {
         if (activity != null && isBiometricEnabled && lockoutSeconds == 0) {
             BiometricHelper.showBiometricPrompt(
                 activity = activity,
-                title = title,
+                title = resolvedTitle,
                 subtitle = subtitle,
-                negativeButtonText = "Use PIN",
+                negativeButtonText = negativeButtonLabel,
                 onSuccess = {
                     prefs.resetFailedAttempts()
                     onUnlockSuccess()
@@ -679,10 +759,21 @@ fun DashboardAuthGate(
                     if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
                         errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
                     ) {
-                        errorMsg = "Fingerprint sensor locked. Please use PIN."
+                        errorMsg = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
                     }
                 }
             )
+        }
+    }
+
+    fun recordFailedAttemptWithMessage(defaultMessage: String) {
+        isError = true
+        prefs.recordFailedAttempt()
+        lockoutSeconds = prefs.getRemainingLockoutSeconds()
+        errorMsg = if (lockoutSeconds > 0) {
+            "Locked out for $lockoutSeconds seconds"
+        } else {
+            defaultMessage
         }
     }
 
@@ -760,10 +851,11 @@ fun DashboardAuthGate(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = title,
+                    text = resolvedTitle,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = NeoPalette.TextPrimary
+                    color = NeoPalette.TextPrimary,
+                    modifier = Modifier.testTag("auth_gate_title")
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -775,13 +867,15 @@ fun DashboardAuthGate(
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(18.dp))
+                if (authMethod == AuthMethod.PIN_4 || authMethod == AuthMethod.PIN_6) {
+                    Spacer(modifier = Modifier.height(18.dp))
 
-                PinDots(
-                    pinLength = pinLength,
-                    enteredLength = enteredPin.length,
-                    isError = isError
-                )
+                    PinDots(
+                        pinLength = pinLength,
+                        enteredLength = enteredPin.length,
+                        isError = isError
+                    )
+                }
 
                 if (errorMsg != null) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -789,66 +883,141 @@ fun DashboardAuthGate(
                         text = errorMsg ?: "",
                         style = MaterialTheme.typography.bodySmall,
                         color = NeoPalette.ErrorRed,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.testTag("auth_gate_error_text")
                     )
                 }
             }
 
-            PinKeypad(
-                onDigitClick = { digit ->
-                    if (lockoutSeconds > 0) return@PinKeypad
-                    if (enteredPin.length < pinLength) {
-                        val next = enteredPin + digit
-                        enteredPin = next
-                        isError = false
-                        errorMsg = null
+            when (authMethod) {
+                AuthMethod.PIN_4, AuthMethod.PIN_6 -> {
+                    PinKeypad(
+                        onDigitClick = { digit ->
+                            if (lockoutSeconds > 0) return@PinKeypad
+                            if (enteredPin.length < pinLength) {
+                                val next = enteredPin + digit
+                                enteredPin = next
+                                isError = false
+                                errorMsg = null
 
-                        if (next.length == pinLength) {
-                            scope.launch {
-                                if (prefs.verifyPin(next)) {
+                                if (next.length == pinLength) {
+                                    scope.launch {
+                                        if (prefs.verifyCredential(next)) {
+                                            prefs.resetFailedAttempts()
+                                            onUnlockSuccess()
+                                        } else {
+                                            recordFailedAttemptWithMessage("Incorrect PIN")
+                                            delay(400L)
+                                            enteredPin = ""
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        onDeleteClick = {
+                            if (lockoutSeconds > 0) return@PinKeypad
+                            if (enteredPin.isNotEmpty()) {
+                                enteredPin = enteredPin.dropLast(1)
+                                isError = false
+                                errorMsg = null
+                            }
+                        },
+                        lockoutSeconds = lockoutSeconds,
+                        extraLeftAction = {
+                            NeoCircularButton(
+                                onClick = { triggerBiometricPrompt() },
+                                size = 70.dp,
+                                isGoldSolid = true,
+                                modifier = Modifier.testTag("dashboard_biometric_trigger_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Fingerprint,
+                                    contentDescription = "Unlock with Fingerprint",
+                                    tint = NeoPalette.TextInverse,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+                    )
+                }
+
+                AuthMethod.PATTERN -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        PatternLockGrid(
+                            enabled = lockoutSeconds == 0,
+                            isError = isError,
+                            gridSize = 236.dp,
+                            onPatternStart = {
+                                isError = false
+                                errorMsg = null
+                            },
+                            onPatternTooShort = {
+                                isError = true
+                                errorMsg = "Connect at least 4 dots"
+                            },
+                            onPatternComplete = { drawnPattern ->
+                                if (lockoutSeconds > 0) return@PatternLockGrid
+                                if (prefs.verifyCredential(drawnPattern)) {
                                     prefs.resetFailedAttempts()
                                     onUnlockSuccess()
                                 } else {
-                                    isError = true
-                                    prefs.recordFailedAttempt()
-                                    lockoutSeconds = prefs.getRemainingLockoutSeconds()
-                                    errorMsg = if (lockoutSeconds > 0) {
-                                        "Locked out for $lockoutSeconds seconds"
-                                    } else {
-                                        "Incorrect PIN"
-                                    }
-                                    delay(400L)
-                                    enteredPin = ""
+                                    recordFailedAttemptWithMessage("Incorrect pattern")
                                 }
                             }
+                        )
+
+                        if (isBiometricEnabled) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            BiometricActionRow(
+                                onBiometricClick = { triggerBiometricPrompt() },
+                                enabled = lockoutSeconds == 0,
+                                testTag = "dashboard_biometric_trigger_button"
+                            )
                         }
                     }
-                },
-                onDeleteClick = {
-                    if (lockoutSeconds > 0) return@PinKeypad
-                    if (enteredPin.isNotEmpty()) {
-                        enteredPin = enteredPin.dropLast(1)
-                        isError = false
-                        errorMsg = null
-                    }
-                },
-                lockoutSeconds = lockoutSeconds,
-                extraLeftAction = {
-                    NeoCircularButton(
-                        onClick = { triggerBiometricPrompt() },
-                        size = 70.dp,
-                        isGoldSolid = true,
-                        modifier = Modifier.testTag("dashboard_biometric_trigger_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Fingerprint,
-                            contentDescription = "Unlock with Fingerprint",
-                            tint = NeoPalette.TextInverse,
-                            modifier = Modifier.size(32.dp)
+                }
+
+                AuthMethod.PASSWORD -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        PasswordAuthInput(
+                            value = enteredPassword,
+                            onValueChange = {
+                                enteredPassword = it
+                                isError = false
+                                errorMsg = null
+                            },
+                            enabled = lockoutSeconds == 0,
+                            isError = isError,
+                            submitButtonText = "Unlock",
+                            onSubmit = {
+                                if (lockoutSeconds > 0) return@PasswordAuthInput
+                                if (enteredPassword.isEmpty()) {
+                                    isError = true
+                                    errorMsg = "Password cannot be empty"
+                                    return@PasswordAuthInput
+                                }
+                                if (prefs.verifyCredential(enteredPassword)) {
+                                    prefs.resetFailedAttempts()
+                                    onUnlockSuccess()
+                                } else {
+                                    recordFailedAttemptWithMessage("Incorrect password")
+                                    enteredPassword = ""
+                                }
+                            }
                         )
+
+                        if (isBiometricEnabled) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            BiometricActionRow(
+                                onBiometricClick = { triggerBiometricPrompt() },
+                                enabled = lockoutSeconds == 0,
+                                testTag = "dashboard_biometric_trigger_button"
+                            )
+                        }
                     }
                 }
-            )
+            }
 
             Spacer(modifier = Modifier.height(4.dp))
         }

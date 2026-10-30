@@ -66,6 +66,13 @@ class AppLockManager private constructor(private val context: Context) {
     @Volatile
     var isLockActivityActive: Boolean = false
 
+    @Volatile
+    var isSystemPickerInFlight: Boolean = false
+        private set
+
+    @Volatile
+    private var lastSystemPickerTimestamp: Long = 0L
+
     // Cache the default home launcher package name to avoid repeated PackageManager IPC Binder calls on every event
     @Volatile
     private var cachedLauncherPackage: String? = null
@@ -75,12 +82,41 @@ class AppLockManager private constructor(private val context: Context) {
         private var instance: AppLockManager? = null
 
         fun getInstance(context: Context): AppLockManager {
-            return instance ?: synchronized(this) {
-                instance ?: AppLockManager(context.applicationContext).also { instance = it }
+            val appCtx = context.applicationContext
+            val current = instance
+            if (current != null && current.context === appCtx) {
+                return current
+            }
+            return synchronized(this) {
+                val existing = instance
+                if (existing != null && existing.context === appCtx) {
+                    existing
+                } else {
+                    AppLockManager(appCtx).also { instance = it }
+                }
             }
         }
 
         private const val LAUNCH_DEBOUNCE_MS = 600L
+        private const val SYSTEM_PICKER_GRACE_MS = 3000L
+    }
+
+    /**
+     * Marks whether our own app has launched a system file/media picker (SAF / PhotoPicker)
+     * so AccessibilityService does not intercept the picker activity with LockActivity.
+     */
+    fun setSystemPickerInFlight(active: Boolean) {
+        isSystemPickerInFlight = active
+        lastSystemPickerTimestamp = System.currentTimeMillis()
+    }
+
+    /**
+     * Returns true while a system picker is active or within a short return grace window.
+     */
+    fun isSystemPickerBypassActive(): Boolean {
+        if (isSystemPickerInFlight) return true
+        val elapsed = System.currentTimeMillis() - lastSystemPickerTimestamp
+        return lastSystemPickerTimestamp > 0L && elapsed in 0L..SYSTEM_PICKER_GRACE_MS
     }
 
     /**
@@ -98,6 +134,11 @@ class AppLockManager private constructor(private val context: Context) {
 
         // Ignore our own application or lock activity
         if (newPackage == context.packageName) {
+            return
+        }
+
+        // Never intercept system pickers or chooser dialogs launched while importing/exporting vault files
+        if (isSystemPickerBypassActive() || isSystemDocumentOrMediaPicker(newPackage)) {
             return
         }
 
@@ -160,6 +201,8 @@ class AppLockManager private constructor(private val context: Context) {
     fun shouldLock(packageName: String): Boolean {
         if (!isProtectionActive()) return false
         if (packageName == context.packageName) return false
+        if (isSystemPickerBypassActive()) return false
+        if (isSystemDocumentOrMediaPicker(packageName)) return false
         if (isLauncherOrSystemUI(packageName)) return false
         if (!preferences.isPackageProtected(packageName)) return false
         if (unlockedPackages.contains(packageName)) return false
@@ -263,5 +306,22 @@ class AppLockManager private constructor(private val context: Context) {
         return packageName == "com.google.android.packageinstaller" ||
                 packageName == "com.android.packageinstaller" ||
                 packageName == "com.samsung.android.packageinstaller"
+    }
+
+    /**
+     * Identifies Android system file/media pickers, intent resolvers, and permission controllers
+     * so they are never intercepted by the app-lock overlay.
+     */
+    fun isSystemDocumentOrMediaPicker(packageName: String): Boolean {
+        return packageName == "com.android.documentsui" ||
+                packageName == "com.google.android.documentsui" ||
+                packageName == "com.android.providers.media.module" ||
+                packageName == "com.google.android.providers.media.module" ||
+                packageName == "com.android.providers.media" ||
+                packageName == "com.google.android.providers.media" ||
+                packageName == "com.android.intentresolver" ||
+                packageName == "com.google.android.intentresolver" ||
+                packageName == "com.android.permissioncontroller" ||
+                packageName == "com.google.android.permissioncontroller"
     }
 }

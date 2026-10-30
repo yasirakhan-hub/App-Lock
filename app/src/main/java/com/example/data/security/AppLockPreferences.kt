@@ -41,46 +41,193 @@ class AppLockPreferences(context: Context) {
         private const val KEY_CALC_SECRET_HASH = "calc_secret_hash"
         private const val KEY_CALC_SECRET_SALT = "calc_secret_salt"
         private const val KEY_CALC_SECRET_LENGTH = "calc_secret_length"
+        private const val KEY_AUTH_METHOD = "auth_method"
 
         const val MAX_FAILED_ATTEMPTS = 5
         const val LOCKOUT_DURATION_MS = 30_000L // 30 seconds
+        const val MIN_PATTERN_DOTS = 4
+        const val MAX_PASSWORD_LENGTH = 32
+
+        /**
+         * Parses a pattern string (e.g. "0-1-2-5", "0,1,2,5", or "0125") into a list of 0..8 dot indices.
+         */
+        fun parsePatternNodes(rawPattern: String): List<Int> {
+            val trimmed = rawPattern.trim()
+            if (trimmed.isEmpty()) return emptyList()
+            return if (trimmed.contains('-') || trimmed.contains(',')) {
+                trimmed.split('-', ',')
+                    .mapNotNull { token -> token.trim().toIntOrNull() }
+            } else {
+                trimmed.mapNotNull { ch -> ch.digitToIntOrNull() }
+            }
+        }
+
+        /**
+         * Converts a list of pattern dot indices (0..8) into a canonical hyphen-separated string.
+         */
+        fun normalizePatternNodes(nodes: List<Int>): String {
+            return nodes.filter { it in 0..8 }.distinct().joinToString("-")
+        }
+
+        /**
+         * Normalizes a raw pattern string into canonical "0-1-2-5" format.
+         */
+        fun normalizePatternString(rawPattern: String): String {
+            return normalizePatternNodes(parsePatternNodes(rawPattern))
+        }
+
+        /**
+         * Validates whether [rawCredential] meets all constraints for [method].
+         */
+        fun isValidCredential(method: AuthMethod, rawCredential: String): Boolean {
+            return when (method) {
+                AuthMethod.PIN_4 -> rawCredential.length == 4 && rawCredential.all { it.isDigit() }
+                AuthMethod.PIN_6 -> rawCredential.length == 6 && rawCredential.all { it.isDigit() }
+                AuthMethod.PATTERN -> {
+                    val nodes = parsePatternNodes(rawCredential)
+                    nodes.size >= MIN_PATTERN_DOTS &&
+                        nodes.distinct().size == nodes.size &&
+                        nodes.all { it in 0..8 }
+                }
+                AuthMethod.PASSWORD -> rawCredential.isNotEmpty() && rawCredential.length <= MAX_PASSWORD_LENGTH
+            }
+        }
+    }
+
+    enum class AuthMethod(val storageKey: String, val displayName: String) {
+        PIN_4("PIN_4", "4-Digit PIN"),
+        PIN_6("PIN_6", "6-Digit PIN"),
+        PATTERN("PATTERN", "Pattern Lock"),
+        PASSWORD("PASSWORD", "Password");
+
+        companion object {
+            fun fromStorageKey(key: String?): AuthMethod? {
+                if (key.isNullOrBlank()) return null
+                return entries.firstOrNull { it.storageKey.equals(key.trim(), ignoreCase = true) }
+            }
+        }
     }
 
     /**
-     * Checks if initial PIN setup has been completed.
+     * Checks if initial authentication credential setup has been completed.
      */
-    fun isPinConfigured(): Boolean {
+    fun isPinConfigured(): Boolean = isCredentialConfigured()
+
+    fun isCredentialConfigured(): Boolean {
         val hash = prefs.getString(KEY_PIN_HASH, null)
         val salt = prefs.getString(KEY_PIN_SALT, null)
         return !hash.isNullOrEmpty() && !salt.isNullOrEmpty()
     }
 
     /**
+     * Returns the currently configured master authentication method.
+     */
+    fun getAuthMethod(): AuthMethod {
+        val stored = AuthMethod.fromStorageKey(prefs.getString(KEY_AUTH_METHOD, null))
+        if (stored != null) return stored
+        return if (prefs.getInt(KEY_PIN_LENGTH, 4) == 6) AuthMethod.PIN_6 else AuthMethod.PIN_4
+    }
+
+    /**
+     * Saves a new authentication method and credential securely using a salted SHA-256 hash.
+     */
+    fun saveAuthCredential(method: AuthMethod, rawCredential: String) {
+        require(isValidCredential(method, rawCredential)) {
+            when (method) {
+                AuthMethod.PIN_4 -> "4-Digit PIN must be exactly 4 numeric digits"
+                AuthMethod.PIN_6 -> "6-Digit PIN must be exactly 6 numeric digits"
+                AuthMethod.PATTERN -> "Pattern must connect at least $MIN_PATTERN_DOTS distinct dots (0..8)"
+                AuthMethod.PASSWORD -> "Password must be between 1 and $MAX_PASSWORD_LENGTH characters"
+            }
+        }
+
+        val canonicalCredential = when (method) {
+            AuthMethod.PATTERN -> normalizePatternString(rawCredential)
+            else -> rawCredential
+        }
+
+        val saltedHash = PinHashUtil.createSaltedHash(canonicalCredential)
+        val storedLength = when (method) {
+            AuthMethod.PIN_4 -> 4
+            AuthMethod.PIN_6 -> 6
+            AuthMethod.PATTERN -> parsePatternNodes(canonicalCredential).size
+            AuthMethod.PASSWORD -> canonicalCredential.length
+        }
+
+        prefs.edit()
+            .putString(KEY_PIN_SALT, saltedHash.salt)
+            .putString(KEY_PIN_HASH, saltedHash.hash)
+            .putInt(KEY_PIN_LENGTH, storedLength)
+            .putString(KEY_AUTH_METHOD, method.storageKey)
+            .apply()
+        resetFailedAttempts()
+    }
+
+    /**
      * Saves a new PIN securely with a freshly generated salt and MessageDigest hash.
      */
     fun savePin(pin: String) {
+        val method = when (pin.length) {
+            6 -> AuthMethod.PIN_6
+            else -> AuthMethod.PIN_4
+        }
         val saltedHash = PinHashUtil.createSaltedHash(pin)
         prefs.edit()
             .putString(KEY_PIN_SALT, saltedHash.salt)
             .putString(KEY_PIN_HASH, saltedHash.hash)
             .putInt(KEY_PIN_LENGTH, pin.length)
+            .putString(KEY_AUTH_METHOD, method.storageKey)
             .apply()
+        resetFailedAttempts()
     }
 
     /**
      * Returns expected PIN length (usually 4 or 6, defaults to 4).
      */
     fun getPinLength(): Int {
-        return prefs.getInt(KEY_PIN_LENGTH, 4)
+        return when (getAuthMethod()) {
+            AuthMethod.PIN_4 -> prefs.getInt(KEY_PIN_LENGTH, 4)
+            AuthMethod.PIN_6 -> 6
+            else -> prefs.getInt(KEY_PIN_LENGTH, 4)
+        }
     }
 
     /**
-     * Verifies the input PIN against the stored MessageDigest salted hash.
+     * Verifies the candidate credential against the active authentication method and stored salted hash.
      */
-    fun verifyPin(candidatePin: String): Boolean {
+    fun verifyCredential(candidateCredential: String): Boolean {
         val hash = prefs.getString(KEY_PIN_HASH, null) ?: return false
         val salt = prefs.getString(KEY_PIN_SALT, null) ?: return false
-        return PinHashUtil.verifyPin(candidatePin, salt, hash)
+        val method = getAuthMethod()
+
+        val canonicalCandidate = when (method) {
+            AuthMethod.PATTERN -> {
+                if (!isValidCredential(AuthMethod.PATTERN, candidateCredential)) return false
+                normalizePatternString(candidateCredential)
+            }
+            AuthMethod.PIN_4 -> {
+                val expectedLen = prefs.getInt(KEY_PIN_LENGTH, 4)
+                if (candidateCredential.length != expectedLen || !candidateCredential.all { it.isDigit() }) return false
+                candidateCredential
+            }
+            AuthMethod.PIN_6 -> {
+                if (!isValidCredential(AuthMethod.PIN_6, candidateCredential)) return false
+                candidateCredential
+            }
+            AuthMethod.PASSWORD -> {
+                if (!isValidCredential(AuthMethod.PASSWORD, candidateCredential)) return false
+                candidateCredential
+            }
+        }
+
+        return PinHashUtil.verifyPin(canonicalCandidate, salt, hash)
+    }
+
+    /**
+     * Verifies the input credential against the stored MessageDigest salted hash.
+     */
+    fun verifyPin(candidatePin: String): Boolean {
+        return verifyCredential(candidatePin)
     }
 
     /**
