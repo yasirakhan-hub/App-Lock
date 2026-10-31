@@ -27,15 +27,12 @@ android {
   signingConfigs {
     create("release") {
     val keystorePath = System.getenv("KEYSTORE_PATH")
-        ?: error("KEYSTORE_PATH is missing")
+        ?: "${rootDir}/my-upload-key.jks"
 
     storeFile = file(keystorePath)
     storePassword = System.getenv("STORE_PASSWORD")
-        ?: error("STORE_PASSWORD is missing")
-    keyAlias = System.getenv("KEY_ALIAS")
-        ?: error("KEY_ALIAS is missing")
+    keyAlias = System.getenv("KEY_ALIAS") ?: "smart-applock"
     keyPassword = System.getenv("KEY_PASSWORD")
-        ?: error("KEY_PASSWORD is missing")
 }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
