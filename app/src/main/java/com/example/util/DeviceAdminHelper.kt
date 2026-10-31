@@ -5,11 +5,24 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import com.example.receiver.AppLockDeviceAdminReceiver
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Helper to query and request Device Administrator privileges and manage anti-uninstall policy.
  */
 object DeviceAdminHelper {
+
+    private val _adminStatusFlow = MutableStateFlow<Boolean?>(null)
+    val adminStatusFlow: StateFlow<Boolean?> = _adminStatusFlow.asStateFlow()
+
+    /**
+     * Notifies all observers that the Device Administrator activation status has changed.
+     */
+    fun notifyAdminStatusChanged(context: Context) {
+        _adminStatusFlow.value = isDeviceAdminActive(context)
+    }
 
     fun getComponentName(context: Context): ComponentName {
         return ComponentName(context, AppLockDeviceAdminReceiver::class.java)
@@ -17,7 +30,7 @@ object DeviceAdminHelper {
 
     /**
      * Checks if Secure AppLock is currently an active Device Administrator by querying DevicePolicyManager.
-     * Defensively queries system service to prevent crashes across customized OEM ROMs and Android versions.
+     * Uses DevicePolicyManager.isAdminActive() as the authoritative source.
      */
     fun isDeviceAdminActive(context: Context): Boolean {
         val appContext = context.applicationContext ?: context
@@ -28,8 +41,14 @@ object DeviceAdminHelper {
                 return true
             }
             val activeAdmins = dpm.activeAdmins
-            if (activeAdmins != null) {
-                activeAdmins.any { it.packageName == appContext.packageName && it.className == adminComponent.className }
+            if (!activeAdmins.isNullOrEmpty()) {
+                activeAdmins.any { admin ->
+                    val isSamePkg = admin.packageName == appContext.packageName || admin.packageName == context.packageName
+                    val isSameClass = admin.className == adminComponent.className ||
+                            admin.className == AppLockDeviceAdminReceiver::class.java.name ||
+                            admin.shortClassName.endsWith("AppLockDeviceAdminReceiver")
+                    (isSamePkg && isSameClass) || (isSamePkg && dpm.isAdminActive(admin))
+                }
             } else {
                 false
             }
@@ -65,7 +84,9 @@ object DeviceAdminHelper {
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                 "Activate Device Administrator to enable anti-uninstall protection. Standard users must deactivate Device Admin before uninstalling Secure AppLock."
             )
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (context !is android.app.Activity) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
         }
     }
 

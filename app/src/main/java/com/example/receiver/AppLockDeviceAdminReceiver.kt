@@ -4,6 +4,7 @@ import android.app.admin.DeviceAdminReceiver
 import android.content.Context
 import android.content.Intent
 import com.example.data.repository.AppLockManager
+import com.example.util.DeviceAdminHelper
 
 /**
  * DeviceAdminReceiver that provides Anti-Uninstall and Anti-Tamper protection.
@@ -17,6 +18,7 @@ class AppLockDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
+        DeviceAdminHelper.notifyAdminStatusChanged(context)
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
@@ -31,5 +33,6 @@ class AppLockDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
+        DeviceAdminHelper.notifyAdminStatusChanged(context)
     }
 }

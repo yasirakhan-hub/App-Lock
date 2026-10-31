@@ -113,12 +113,33 @@ fun DashboardScreen(
     var isSettingsAppProtected by remember { mutableStateOf(prefs.isPackageProtected("com.android.settings")) }
     var showThemeMenu by remember { mutableStateOf(false) }
 
+    val deviceAdminLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+        DeviceAdminHelper.notifyAdminStatusChanged(context)
+    }
+
     LaunchedEffect(Unit) {
+        isAccessibilityActive = PermissionHelper.isAccessibilityServiceEnabled(context)
+        isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
+        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+        isSettingsAppProtected = prefs.isPackageProtected("com.android.settings")
         val protectedSet = prefs.getProtectedPackages()
         protectedCount = protectedSet.size
         val count = runCatching { appDiscoveryRepository.getInstalledLaunchableAppsCount() }.getOrNull()
         if (count != null && count > 0) {
             totalAppsCount = count
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        DeviceAdminHelper.adminStatusFlow.collect { status ->
+            if (status != null) {
+                isDeviceAdminActive = status
+            } else {
+                isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+            }
         }
     }
 
@@ -552,7 +573,11 @@ fun DashboardScreen(
                 isGranted = isDeviceAdminActive,
                 actionLabel = "Activate Admin",
                 onAction = {
-                    DeviceAdminHelper.openDeviceAdminActivation(context)
+                    try {
+                        deviceAdminLauncher.launch(DeviceAdminHelper.createAddDeviceAdminIntent(context))
+                    } catch (_: Exception) {
+                        DeviceAdminHelper.openDeviceAdminActivation(context)
+                    }
                 },
                 testTag = "perm_device_admin_card"
             )

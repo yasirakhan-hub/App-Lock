@@ -302,6 +302,11 @@ class MainActivity : FragmentActivity() {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        com.example.util.DeviceAdminHelper.notifyAdminStatusChanged(this)
+    }
 }
 
 @Composable

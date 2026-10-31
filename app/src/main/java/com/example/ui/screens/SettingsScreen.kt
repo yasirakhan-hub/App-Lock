@@ -116,6 +116,13 @@ fun SettingsScreen(
     var isCalcDisguiseEnabled by remember { mutableStateOf(preferences.isCalculatorDisguiseEnabled()) }
     var activeAuthMethod by remember { mutableStateOf(preferences.getAuthMethod()) }
 
+    val deviceAdminLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+        DeviceAdminHelper.notifyAdminStatusChanged(context)
+    }
+
     var showChangePinDialog by remember { mutableStateOf(false) }
     var showChangeQuestionDialog by remember { mutableStateOf(false) }
     var showSecurityLimitationsDialog by remember { mutableStateOf(false) }
@@ -151,6 +158,16 @@ fun SettingsScreen(
         isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
         isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
         activeAuthMethod = preferences.getAuthMethod()
+    }
+
+    LaunchedEffect(Unit) {
+        DeviceAdminHelper.adminStatusFlow.collect { status ->
+            if (status != null) {
+                isDeviceAdminActive = status
+            } else {
+                isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+            }
+        }
     }
 
     Scaffold(
@@ -494,7 +511,11 @@ fun SettingsScreen(
                     if (isDeviceAdminActive) {
                         showAuthForDeactivateAdmin = true
                     } else {
-                        DeviceAdminHelper.openDeviceAdminActivation(context)
+                        try {
+                            deviceAdminLauncher.launch(DeviceAdminHelper.createAddDeviceAdminIntent(context))
+                        } catch (_: Exception) {
+                            DeviceAdminHelper.openDeviceAdminActivation(context)
+                        }
                     }
                 },
                 testTag = "settings_device_admin_row"
@@ -680,6 +701,7 @@ fun SettingsScreen(
                 onAuthorized = {
                     DeviceAdminHelper.deactivateDeviceAdmin(context)
                     isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+                    DeviceAdminHelper.notifyAdminStatusChanged(context)
                     showAuthForDeactivateAdmin = false
                 },
                 onDismiss = { showAuthForDeactivateAdmin = false }

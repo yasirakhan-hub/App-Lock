@@ -991,6 +991,85 @@ class ExampleRobolectricTest {
 
         assertEquals("Biometric success must execute the unlock action exactly once", 1, unlockSuccessCount)
     }
+
+    @Test
+    fun testDeviceAdminActivationStatusAndFlow() {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        val adminComponent = com.example.util.DeviceAdminHelper.getComponentName(context)
+
+        // 1. Initial State: inactive in mock environment
+        val initialStatus = com.example.util.DeviceAdminHelper.isDeviceAdminActive(context)
+        assertEquals("Initial device admin status must match DPM isAdminActive", dpm.isAdminActive(adminComponent), initialStatus)
+
+        // 2. Intent extra contains correct admin component
+        val addIntent = com.example.util.DeviceAdminHelper.createAddDeviceAdminIntent(context)
+        assertEquals(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN, addIntent.action)
+        val extraComponent = IntentCompat.getParcelableExtra(addIntent, android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, android.content.ComponentName::class.java)
+        assertEquals(adminComponent, extraComponent)
+
+        // 3. Status flow notification
+        com.example.util.DeviceAdminHelper.notifyAdminStatusChanged(context)
+        assertEquals(initialStatus, com.example.util.DeviceAdminHelper.adminStatusFlow.value)
+
+        // 4. Receiver triggers notification on enable/disable callbacks
+        val receiver = com.example.receiver.AppLockDeviceAdminReceiver()
+        val dummyIntent = android.content.Intent()
+        receiver.onEnabled(context, dummyIntent)
+        assertEquals(initialStatus, com.example.util.DeviceAdminHelper.adminStatusFlow.value)
+        receiver.onDisabled(context, dummyIntent)
+        assertEquals(initialStatus, com.example.util.DeviceAdminHelper.adminStatusFlow.value)
+    }
+
+    @Test
+    fun testAppInfoProtectionDetectionAndSessionLifecycle() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.savePin("1234")
+        preferences.setProtectionEnabled(true)
+
+        val service = com.example.service.AppLockAccessibilityService()
+
+        // 1. Package identification
+        assertTrue("com.android.settings is recognized as settings package",
+            service.isSettingsOrSecurityPackage("com.android.settings"))
+        assertTrue("com.google.android.settings is recognized as settings package",
+            service.isSettingsOrSecurityPackage("com.google.android.settings"))
+        assertTrue("com.miui.securitycenter is recognized as security package",
+            service.isSettingsOrSecurityPackage("com.miui.securitycenter"))
+        assertFalse("com.instagram.android is not a settings package",
+            service.isSettingsOrSecurityPackage("com.instagram.android"))
+
+        // 2. Essential system settings must never be locked
+        assertTrue("Device Admin activation is essential system setting",
+            service.isEssentialSystemSettings("com.android.settings.DeviceAdminAdd"))
+        assertTrue("Accessibility Settings is essential system setting",
+            service.isEssentialSystemSettings("com.android.settings.accessibility.AccessibilitySettings"))
+        assertTrue("WiFi Settings is essential system setting",
+            service.isEssentialSystemSettings("com.android.settings.wifi.WifiSettings"))
+        assertFalse("App Details class is not excluded as essential",
+            service.isEssentialSystemSettings("com.android.settings.applications.InstalledAppDetailsTop"))
+
+        // 3. App Details screen classes recognized
+        assertTrue(service.isAppDetailsClass("com.android.settings.applications.InstalledAppDetailsTop"))
+        assertTrue(service.isAppDetailsClass("com.android.settings.Settings\$AppInfoDashboardActivity"))
+        assertTrue(service.isAppDetailsClass("com.android.settings.spa.SpaActivity"))
+        assertTrue(service.isAppDetailsClass("com.android.settings.SubSettings"))
+        assertFalse(service.isAppDetailsClass("com.android.settings.Settings"))
+
+        // 4. Self App Info session lifecycle
+        assertFalse("Initially self App Info is not unlocked", appLockManager.isSelfAppInfoUnlocked())
+        appLockManager.onSelfAppInfoUnlocked()
+        assertTrue("Self App Info is unlocked after authentication", appLockManager.isSelfAppInfoUnlocked())
+
+        // Switching from Settings to launcher or another app clears self App Info session
+        appLockManager.onForegroundPackageChanged("com.android.launcher3", "com.android.launcher3.Launcher")
+        assertFalse("Leaving Settings must invalidate self App Info session", appLockManager.isSelfAppInfoUnlocked())
+
+        // Re-authenticating and then turning screen off clears session
+        appLockManager.onSelfAppInfoUnlocked()
+        assertTrue(appLockManager.isSelfAppInfoUnlocked())
+        appLockManager.onScreenOff()
+        assertFalse("Screen off must invalidate self App Info session", appLockManager.isSelfAppInfoUnlocked())
+    }
 }
 
 

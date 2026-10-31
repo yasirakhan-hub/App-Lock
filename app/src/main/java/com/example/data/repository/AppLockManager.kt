@@ -107,6 +107,10 @@ class AppLockManager private constructor(private val context: Context) {
     @Volatile
     private var installerSessionUnlockedTimestamp: Long = 0L
 
+    // Tracks an active authenticated self App Info session to prevent repeated authentication loops while viewing App Info
+    @Volatile
+    private var selfAppInfoUnlockedTimestamp: Long = 0L
+
     companion object {
         @Volatile
         private var instance: AppLockManager? = null
@@ -132,6 +136,7 @@ class AppLockManager private constructor(private val context: Context) {
         private const val RECENTS_GRACE_WINDOW_MS = 1200L
         private const val IME_CACHE_TTL_MS = 30000L
         private const val INSTALLER_SESSION_WINDOW_MS = 45000L
+        private const val SELF_APP_INFO_SESSION_WINDOW_MS = 60000L
 
         val KNOWN_IME_PACKAGES = setOf(
             "com.google.android.inputmethod.latin", // Gboard
@@ -255,6 +260,11 @@ class AppLockManager private constructor(private val context: Context) {
             return
         }
 
+        // Invalidate self App Info authenticated session as soon as foreground leaves Settings:
+        if (!isSettingsPackage(newPackage)) {
+            clearSelfAppInfoSession()
+        }
+
         // 3. User is on Home screen or Launcher:
         if (isLauncher) {
             isRecentsOverviewActive = false
@@ -372,17 +382,29 @@ class AppLockManager private constructor(private val context: Context) {
     }
 
     /**
-     * Checks if Smart AppLock's self App Info screen has been unlocked in this session.
+     * Checks if Smart AppLock's self App Info screen has been unlocked in this active session.
      */
     fun isSelfAppInfoUnlocked(): Boolean {
-        return unlockedPackages.contains(context.packageName)
+        val now = System.currentTimeMillis()
+        val elapsed = now - selfAppInfoUnlockedTimestamp
+        val isSessionActive = selfAppInfoUnlockedTimestamp > 0L && elapsed in 0L..SELF_APP_INFO_SESSION_WINDOW_MS
+        return isSessionActive && unlockedPackages.contains(context.packageName)
     }
 
     /**
      * Records that Smart AppLock's self App Info screen was unlocked.
      */
     fun onSelfAppInfoUnlocked() {
+        selfAppInfoUnlockedTimestamp = System.currentTimeMillis()
         unlockedPackages.add(context.packageName)
+    }
+
+    /**
+     * Clears the self App Info authenticated session.
+     */
+    fun clearSelfAppInfoSession() {
+        selfAppInfoUnlockedTimestamp = 0L
+        unlockedPackages.remove(context.packageName)
     }
 
     /**
@@ -479,6 +501,7 @@ class AppLockManager private constructor(private val context: Context) {
         pendingExitPackage = null
         pendingExitTimestamp = 0L
         installerSessionUnlockedTimestamp = 0L
+        clearSelfAppInfoSession()
         isRecentsOverviewActive = false
     }
 
@@ -491,6 +514,7 @@ class AppLockManager private constructor(private val context: Context) {
         pendingExitPackage = null
         pendingExitTimestamp = 0L
         installerSessionUnlockedTimestamp = 0L
+        clearSelfAppInfoSession()
         isRecentsOverviewActive = false
         invalidateLauncherCache()
     }
@@ -627,5 +651,20 @@ class AppLockManager private constructor(private val context: Context) {
      */
     fun isSystemDocumentOrMediaPicker(packageName: String): Boolean {
         return packageName in SYSTEM_PICKER_PACKAGES
+    }
+
+    /**
+     * Identifies Android system settings and security managers.
+     */
+    fun isSettingsPackage(packageName: String): Boolean {
+        val lower = packageName.lowercase()
+        return lower == "com.android.settings" ||
+                lower == "com.google.android.settings" ||
+                lower.contains("settings") ||
+                lower.contains("securitycenter") ||
+                lower.contains("safecenter") ||
+                lower.contains("permissionmanager") ||
+                lower == "com.samsung.android.app.telephonyui" ||
+                lower == "com.samsung.android.sm_cn"
     }
 }
