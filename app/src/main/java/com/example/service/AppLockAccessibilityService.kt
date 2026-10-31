@@ -113,7 +113,7 @@ class AppLockAccessibilityService : AccessibilityService() {
         // 3. Package Installer Handling (Installation / Update vs Uninstall Protection):
         // Intercept Package Installer when attempting to uninstall Smart AppLock,
         // while allowing legitimate installation and update flows once authenticated without looping.
-        if (appLockManager.isPackageInstaller(pkgName)) {
+        if (appLockManager.isPackageInstaller(pkgName) || isPackageInstallerUninstallingSelf(pkgName, className, event)) {
             if (isPackageInstallerUninstallingSelf(pkgName, className, event)) {
                 if (!appLockManager.isSelfAppInfoUnlocked()) {
                     appLockManager.launchLockScreen(pkgName, className, this)
@@ -136,8 +136,8 @@ class AppLockAccessibilityService : AccessibilityService() {
         // Never lock essential system configuration screens (Accessibility, DeviceAdmin, WiFi, etc.)
         if (isEssentialSystemSettings(className)) return false
 
-        val appName = getString(com.example.R.string.app_name)
-        val targetPackage = packageName
+        val appName = try { getString(com.example.R.string.app_name) } catch (_: Exception) { "Smart AppLock" }
+        val targetPackage = try { packageName } catch (_: Exception) { "com.aistudio.applock.secjkv" }
 
         // 1. Direct text/contentDescription check on event
         val matchesText = event.text?.any { text ->
@@ -260,10 +260,8 @@ class AppLockAccessibilityService : AccessibilityService() {
         className: String?,
         event: AccessibilityEvent
     ): Boolean {
-        if (!appLockManager.isPackageInstaller(pkgName)) return false
-
-        val appName = getString(com.example.R.string.app_name)
-        val targetPackage = packageName
+        val appName = try { getString(com.example.R.string.app_name) } catch (_: Exception) { "Smart AppLock" }
+        val targetPackage = try { packageName } catch (_: Exception) { "com.aistudio.applock.secjkv" }
 
         // 1. Direct text/contentDescription inspection
         val matchesText = event.text?.any { text ->
@@ -280,7 +278,7 @@ class AppLockAccessibilityService : AccessibilityService() {
             contentDesc.contains("secjkv", ignoreCase = true)
         )
 
-        if (matchesText || matchesDesc) return true
+        val directMatches = matchesText || matchesDesc
 
         // 2. Deep node inspection for dialog text
         val rootNode = try {
@@ -289,22 +287,47 @@ class AppLockAccessibilityService : AccessibilityService() {
             null
         }
 
+        var nodeHasIdentifier = false
+        var hasUninstallCue = false
+
         if (rootNode != null) {
             try {
                 val appNameNodes = rootNode.findAccessibilityNodeInfosByText(appName)
                 val pkgNodes = rootNode.findAccessibilityNodeInfosByText("secjkv")
-                val hasIdentifier = !appNameNodes.isNullOrEmpty() || !pkgNodes.isNullOrEmpty()
+                nodeHasIdentifier = !appNameNodes.isNullOrEmpty() || !pkgNodes.isNullOrEmpty()
 
                 val uninstallNodes = rootNode.findAccessibilityNodeInfosByText("uninstall")
                 val deleteNodes = rootNode.findAccessibilityNodeInfosByText("delete")
                 val okNodes = rootNode.findAccessibilityNodeInfosByText("OK")
-                val hasUninstallCue = !uninstallNodes.isNullOrEmpty() || !deleteNodes.isNullOrEmpty() || !okNodes.isNullOrEmpty()
-
-                if (hasIdentifier && hasUninstallCue) {
-                    return true
-                }
+                hasUninstallCue = !uninstallNodes.isNullOrEmpty() || !deleteNodes.isNullOrEmpty() || !okNodes.isNullOrEmpty()
             } catch (_: Exception) {
             }
+        }
+
+        if (!::appLockManager.isInitialized) {
+            try {
+                val ctx = applicationContext ?: this
+                appLockManager = AppLockManager.getInstance(ctx)
+            } catch (_: Exception) {
+            }
+        }
+
+        val isInstaller = try {
+            if (::appLockManager.isInitialized) {
+                appLockManager.isPackageInstaller(pkgName)
+            } else {
+                pkgName.contains("packageinstaller") || pkgName.contains("permissioncontroller")
+            }
+        } catch (_: Exception) {
+            false
+        }
+
+        if (directMatches && (hasUninstallCue || isInstaller)) {
+            return true
+        }
+
+        if (nodeHasIdentifier && hasUninstallCue) {
+            return true
         }
 
         return false

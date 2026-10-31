@@ -231,6 +231,8 @@ class AppLockManager private constructor(private val context: Context) {
     fun onAppLaunchedFromRecents(packageName: String) {
         isRecentsOverviewActive = false
         lastRecentsOverviewTimestamp = 0L
+        // Crucial: Returning to a protected app from Recent Apps MUST require authentication!
+        unlockedPackages.remove(packageName)
     }
 
     /**
@@ -265,6 +267,12 @@ class AppLockManager private constructor(private val context: Context) {
         if (isRecents) {
             isRecentsOverviewActive = true
             lastRecentsOverviewTimestamp = System.currentTimeMillis()
+            // When user opens Recent Apps, the previously active app is backgrounded and relocked
+            if (!preferences.isRelockOnScreenOff() && previous != null &&
+                !isLauncherOrSystemUI(previous) && !isTransientSystemOrOverlayPackage(previous)
+            ) {
+                unlockedPackages.remove(previous)
+            }
             return
         }
 
@@ -280,14 +288,11 @@ class AppLockManager private constructor(private val context: Context) {
             currentForegroundPackage = newPackage
             lastLauncherExitTimestamp = System.currentTimeMillis()
 
-            // If immediate relock on exit is enabled:
-            // Stage previous app for relock, but allow a grace period so gesture
-            // navigation into Recent Apps overview does NOT falsely lock the app!
+            // When user exits to home screen, relock the previous app
             if (!preferences.isRelockOnScreenOff() && previous != null &&
                 previous != newPackage && !isLauncherOrSystemUI(previous) && !isTransientSystemOrOverlayPackage(previous)
             ) {
-                pendingExitPackage = previous
-                pendingExitTimestamp = System.currentTimeMillis()
+                unlockedPackages.remove(previous)
             }
             return
         }
@@ -298,33 +303,11 @@ class AppLockManager private constructor(private val context: Context) {
             return
         }
 
-        val now = System.currentTimeMillis()
-
         // If user switched directly to a DIFFERENT real app (App A -> App B):
         if (!preferences.isRelockOnScreenOff() && previous != null &&
             previous != newPackage && !isLauncherOrSystemUI(previous) && !isTransientSystemOrOverlayPackage(previous)
         ) {
             unlockedPackages.remove(previous)
-        }
-
-        // Handle pending exit package from recent launcher transition:
-        val pendingExit = pendingExitPackage
-        if (pendingExit != null) {
-            if (pendingExit != newPackage) {
-                // User opened a different app: immediately relock the previous app
-                unlockedPackages.remove(pendingExit)
-                pendingExitPackage = null
-            } else {
-                // User returned to the same app:
-                // Check if user stayed away on launcher longer than the gesture/recents grace window
-                val elapsedSinceExit = now - pendingExitTimestamp
-                if (elapsedSinceExit > RECENTS_GRACE_WINDOW_MS) {
-                    // Truly left and stayed out: relock
-                    unlockedPackages.remove(newPackage)
-                }
-                // Otherwise: quick gesture or returned from Recents within grace window: keep unlocked!
-                pendingExitPackage = null
-            }
         }
 
         currentForegroundPackage = newPackage
@@ -661,9 +644,12 @@ class AppLockManager private constructor(private val context: Context) {
      * Checks whether the given package is an Android Package Installer / Uninstaller component.
      */
     fun isPackageInstaller(packageName: String): Boolean {
-        return packageName == "com.google.android.packageinstaller" ||
-                packageName == "com.android.packageinstaller" ||
-                packageName == "com.samsung.android.packageinstaller"
+        val lower = packageName.lowercase()
+        return lower == "com.google.android.packageinstaller" ||
+                lower == "com.android.packageinstaller" ||
+                lower == "com.samsung.android.packageinstaller" ||
+                lower == "com.google.android.permissioncontroller" ||
+                lower == "com.android.permissioncontroller"
     }
 
     /**

@@ -25,9 +25,13 @@ class AppLockDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
         try {
             // Only launch lock screen if deactivation was not already authenticated
-            if (!DeviceAdminHelper.consumeDeactivationAuthorized()) {
-                val appLockManager = AppLockManager.getInstance(context)
-                appLockManager.launchLockScreen(context.packageName)
+            if (!DeviceAdminHelper.isDeactivationAuthorized()) {
+                val lockIntent = Intent(context, com.example.ui.lock.LockActivity::class.java).apply {
+                    putExtra(com.example.ui.lock.LockActivity.EXTRA_TARGET_PACKAGE, context.packageName)
+                    putExtra(com.example.ui.lock.LockActivity.EXTRA_ACTION_DEACTIVATE_ADMIN, true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                context.startActivity(lockIntent)
             }
         } catch (_: Exception) {
         }
@@ -36,6 +40,7 @@ class AppLockDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
+        DeviceAdminHelper.setDeactivationAuthorized(false)
         DeviceAdminHelper.notifyAdminStatusChanged(context)
     }
 }

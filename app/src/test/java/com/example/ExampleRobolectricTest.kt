@@ -1138,16 +1138,86 @@ class ExampleRobolectricTest {
         com.example.util.DeviceAdminHelper.setDeactivationAuthorized(true)
         assertTrue(com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
 
-        // In onDisableRequested, the authorization must be consumed so no secondary lock screen is launched
+        // In onDisableRequested, the authorization remains active throughout the multi-step system deactivation dialogs
         val warning1 = receiver.onDisableRequested(context, dummyIntent)
         assertTrue(warning1.isNotEmpty())
-        assertFalse("Authorization must be consumed so no duplicate screen is prompted",
+        assertTrue("Authorization remains active for subsequent system confirmation step",
+            com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
+
+        // Second system callback (when user taps confirm deactivation in system dialog) must also see authorized:
+        val warning2 = receiver.onDisableRequested(context, dummyIntent)
+        assertTrue(warning2.isNotEmpty())
+        assertTrue(com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
+
+        // Once disabled, authorization is cleared:
+        receiver.onDisabled(context, dummyIntent)
+        assertFalse("Disabled callback resets authorization",
             com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
 
         // 2. When deactivation is requested externally (e.g. Android Settings) without in-app authorization:
-        val warning2 = receiver.onDisableRequested(context, dummyIntent)
-        assertTrue(warning2.isNotEmpty())
+        val warning3 = receiver.onDisableRequested(context, dummyIntent)
+        assertTrue(warning3.isNotEmpty())
         assertFalse(com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
+    }
+
+    @Test
+    fun testRecentAppsMissingReauthenticationFix() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.savePin("1234")
+        preferences.setProtectionEnabled(true)
+        val protectedApp = "com.sample.banking"
+        preferences.setPackageProtected(protectedApp, true)
+
+        // 1. App is launched and unlocked
+        appLockManager.onPackageUnlocked(protectedApp)
+        appLockManager.onForegroundPackageChanged(protectedApp, "com.sample.banking.MainActivity")
+        assertTrue("App is unlocked initially", appLockManager.isPackageUnlocked(protectedApp))
+        assertFalse(appLockManager.shouldLock(protectedApp))
+
+        // 2. User presses Back, leaving app in Recent Apps and returning to launcher
+        appLockManager.onForegroundPackageChanged("com.android.launcher3", "com.android.launcher3.Launcher")
+        assertFalse("Leaving app to launcher must relock the app immediately", appLockManager.isPackageUnlocked(protectedApp))
+
+        // 3. User later opens Recent Apps
+        appLockManager.onRecentsOverviewEntered()
+        assertTrue(appLockManager.isRecentsOverviewActive)
+        assertFalse("Recent Apps overview alone must never prompt authentication",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.MainActivity"))
+
+        // 4. User taps the protected app in Recent Apps
+        appLockManager.onAppLaunchedFromRecents(protectedApp)
+        assertFalse(appLockManager.isRecentsOverviewActive)
+        assertTrue("Returning to protected app from Recent Apps MUST require authentication",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.MainActivity"))
+    }
+
+    @Test
+    fun testAntiUninstallProtectionPackageInstallerAndPermissionController() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+
+        // 1. Verify modern permissioncontroller packages are recognized as package installers
+        assertTrue(appLockManager.isPackageInstaller("com.google.android.packageinstaller"))
+        assertTrue(appLockManager.isPackageInstaller("com.android.packageinstaller"))
+        assertTrue(appLockManager.isPackageInstaller("com.google.android.permissioncontroller"))
+        assertTrue(appLockManager.isPackageInstaller("com.android.permissioncontroller"))
+
+        // 2. Simulated uninstallation event with app name or package and uninstall cues
+        val dummyEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.google.android.permissioncontroller"
+            className = "com.android.permissioncontroller.permission.ui.UninstallerActivity"
+            text.add("Do you want to uninstall Smart AppLock?")
+        }
+
+        assertTrue("Uninstall attempt targeting Smart AppLock must be detected",
+            service.isPackageInstallerUninstallingSelf(
+                "com.google.android.permissioncontroller",
+                "com.android.permissioncontroller.permission.ui.UninstallerActivity",
+                dummyEvent
+            )
+        )
     }
 
     @Test

@@ -27,13 +27,11 @@ object DeviceAdminHelper {
     fun isDeactivationAuthorized(): Boolean {
         val now = System.currentTimeMillis()
         val elapsed = now - deactivationAuthorizedTimestamp
-        return deactivationAuthorizedTimestamp > 0L && elapsed in 0L..15000L
+        return deactivationAuthorizedTimestamp > 0L && elapsed in 0L..60_000L
     }
 
     fun consumeDeactivationAuthorized(): Boolean {
-        val authorized = isDeactivationAuthorized()
-        deactivationAuthorizedTimestamp = 0L
-        return authorized
+        return isDeactivationAuthorized()
     }
 
     /**
