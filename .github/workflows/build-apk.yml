@@ -42,7 +42,22 @@ jobs:
             echo "ERROR: Keystore restoration failed."
             exit 1
           fi
+      
+      - name: Verify permanent signing keystore
+        env:
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          keytool -list \
+            -keystore "$RUNNER_TEMP/smart-applock-release.jks" \
+            -storepass "$STORE_PASSWORD"
 
+          keytool -list \
+            -keystore "$RUNNER_TEMP/smart-applock-release.jks" \
+            -storepass "$STORE_PASSWORD" \
+            -alias "$KEY_ALIAS"
+            
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
