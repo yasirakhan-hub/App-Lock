@@ -70,11 +70,21 @@ jobs:
 
       - name: Verify permanent signing keystore
         env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.KEY_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'smart-applock' }}
         run: |
           set -euo pipefail
+
+          if [ -z "${STORE_PASSWORD:-}" ]; then
+            echo "::error::Neither KEYSTORE_PASSWORD nor KEY_PASSWORD is configured in repository secrets."
+            exit 1
+          fi
+
+          if [ -z "${KEY_PASSWORD:-}" ]; then
+            echo "::error::KEY_PASSWORD is empty."
+            exit 1
+          fi
 
           KEYSTORE_FILE="$RUNNER_TEMP/smart-applock-release.jks"
           TARGET_ALIAS="${KEY_ALIAS:-smart-applock}"
@@ -88,34 +98,12 @@ jobs:
             KEYTOOL_TYPE_FLAGS=("-storetype" "PKCS12")
           fi
 
-          echo "Verifying keystore integrity and alias '${TARGET_ALIAS}'..."
+          echo "Verifying keystore integrity and alias '${TARGET_ALIAS}' using STORE_PASSWORD..."
 
-          STORE_PASS_ENV=""
-          if [ -n "${KEYSTORE_PASSWORD:-}" ] && keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
-            STORE_PASS_ENV="KEYSTORE_PASSWORD"
-          elif [ -n "${KEY_PASSWORD:-}" ] && keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
-            STORE_PASS_ENV="KEY_PASSWORD"
-          fi
-
-          if [ -n "$STORE_PASS_ENV" ]; then
-            echo "Keystore password verified using environment variable: ${STORE_PASS_ENV}."
-            keytool -list -v "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS"
+          if keytool -list -v "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env STORE_PASSWORD -alias "$TARGET_ALIAS"; then
+            echo "Keystore password and alias verified successfully."
           else
-            echo "::error::Keystore verification failed for alias '${TARGET_ALIAS}'."
-            echo "Testing diagnostic output with configured credentials (without exposing values):"
-
-            if [ -n "${KEYSTORE_PASSWORD:-}" ]; then
-              echo "Testing KEYSTORE_PASSWORD:"
-              keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" || true
-            fi
-            if [ -n "${KEY_PASSWORD:-}" ]; then
-              echo "Testing KEY_PASSWORD:"
-              keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" || true
-            fi
-            if [ -z "${KEYSTORE_PASSWORD:-}" ] && [ -z "${KEY_PASSWORD:-}" ]; then
-              echo "::error::Neither KEYSTORE_PASSWORD nor KEY_PASSWORD secret is configured in repository secrets."
-            fi
-
+            echo "::error::Keystore verification failed for alias '${TARGET_ALIAS}' with STORE_PASSWORD."
             cat << 'EOF'
 
 ================================================================================
@@ -137,20 +125,13 @@ EOF
             exit 1
           fi
 
-          echo "Keystore validation succeeded: Key alias '${TARGET_ALIAS}' verified."
-
-          # Verify private key access using certreq
-          KEY_PASS_ENV=""
-          if [ -n "${KEY_PASSWORD:-}" ] && keytool -certreq "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS" -keypass:env KEY_PASSWORD > /dev/null 2>&1; then
-            KEY_PASS_ENV="KEY_PASSWORD"
-          elif [ -n "${KEYSTORE_PASSWORD:-}" ] && keytool -certreq "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS" -keypass:env KEYSTORE_PASSWORD > /dev/null 2>&1; then
-            KEY_PASS_ENV="KEYSTORE_PASSWORD"
-          fi
-
-          if [ -n "$KEY_PASS_ENV" ]; then
-            echo "Private key verified using environment variable: ${KEY_PASS_ENV}."
+          echo "Verifying private key recovery for alias '${TARGET_ALIAS}' with KEY_PASSWORD..."
+          if keytool -certreq "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env STORE_PASSWORD -alias "$TARGET_ALIAS" -keypass:env KEY_PASSWORD > /dev/null 2>&1; then
+            echo "Private key recovered and verified successfully."
           else
-            echo "::warning::Private key could not be recovered with KEY_PASSWORD or KEYSTORE_PASSWORD."
+            echo "::error::Private key could not be recovered with KEY_PASSWORD for alias '${TARGET_ALIAS}'."
+            keytool -certreq "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env STORE_PASSWORD -alias "$TARGET_ALIAS" -keypass:env KEY_PASSWORD || true
+            exit 1
           fi
 
       - name: Set up Gradle
