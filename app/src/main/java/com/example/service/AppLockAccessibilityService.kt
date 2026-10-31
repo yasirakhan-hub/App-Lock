@@ -64,8 +64,9 @@ class AppLockAccessibilityService : AccessibilityService() {
                 return
             }
 
-            // 3. Anti-Uninstall Protection:
-            // Intercept Package Installer when attempting to uninstall Smart AppLock
+            // 3. Package Installer Handling (Installation / Update vs Uninstall Protection):
+            // Intercept Package Installer when attempting to uninstall Smart AppLock,
+            // while allowing legitimate installation and update flows once authenticated without looping.
             if (appLockManager.isPackageInstaller(pkgName)) {
                 val appName = getString(com.example.R.string.app_name)
                 val isUninstallingSelf = event.text?.any { text ->
@@ -76,6 +77,11 @@ class AppLockAccessibilityService : AccessibilityService() {
                     if (!appLockManager.isSelfAppInfoUnlocked()) {
                         appLockManager.launchLockScreen(pkgName, className, this)
                     }
+                    return
+                }
+
+                // If this is an installation/update flow and session is already unlocked, bypass repeated prompts
+                if (appLockManager.isInstallerSessionUnlocked()) {
                     return
                 }
             }
@@ -110,7 +116,23 @@ class AppLockAccessibilityService : AccessibilityService() {
             contentDesc.contains("secjkv", ignoreCase = true)
         )
 
-        return matchesText || matchesDesc
+        if (matchesText || matchesDesc) {
+            return true
+        }
+
+        // Deep inspection via rootInActiveWindow when available
+        return try {
+            val rootNode = rootInActiveWindow ?: return false
+            val appNameMatches = rootNode.findAccessibilityNodeInfosByText(appName)
+            if (!appNameMatches.isNullOrEmpty()) {
+                true
+            } else {
+                val pkgMatches = rootNode.findAccessibilityNodeInfosByText("secjkv")
+                !pkgMatches.isNullOrEmpty()
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun isSettingsOrSecurityPackage(pkgName: String): Boolean {
@@ -118,7 +140,8 @@ class AppLockAccessibilityService : AccessibilityService() {
                 pkgName == "com.miui.securitycenter" ||
                 pkgName == "com.coloros.safecenter" ||
                 pkgName == "com.oplus.safecenter" ||
-                pkgName == "com.vivo.permissionmanager"
+                pkgName == "com.vivo.permissionmanager" ||
+                pkgName == "com.samsung.android.app.telephonyui"
     }
 
     private fun isAppDetailsClass(className: String): Boolean {
@@ -129,7 +152,9 @@ class AppLockAccessibilityService : AccessibilityService() {
                 lower.contains("appmanagementactivity") ||
                 lower.contains("spaactivity") ||
                 lower.contains("applicationsstate") ||
-                lower.contains("subsettings")
+                lower.contains("subsettings") ||
+                lower.contains("applicationsetting") ||
+                lower.contains("appinfo")
     }
 
     private fun isEssentialSystemSettings(className: String): Boolean {

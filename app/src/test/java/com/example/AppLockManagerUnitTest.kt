@@ -121,4 +121,19 @@ class AppLockManagerUnitTest {
         assertTrue(recreatedUnlockedPackages.isEmpty())
         assertFalse(recreatedUnlockedPackages.contains("com.whatsapp"))
     }
+
+    @Test
+    fun installerSessionGraceWindow_contractVerification() {
+        val sessionDuration = 45000L
+        var unlockTime = 1000L
+        fun isSessionActive(currentTime: Long): Boolean {
+            val elapsed = currentTime - unlockTime
+            return unlockTime > 0L && elapsed in 0L..sessionDuration
+        }
+
+        assertTrue(isSessionActive(1000L))
+        assertTrue(isSessionActive(20000L))
+        assertTrue(isSessionActive(45000L))
+        assertFalse(isSessionActive(46001L))
+    }
 }

@@ -103,6 +103,10 @@ class AppLockManager private constructor(private val context: Context) {
     @Volatile
     private var pendingExitTimestamp: Long = 0L
 
+    // Tracks an active authenticated package installer session to prevent repeated authentication loops during installation/update
+    @Volatile
+    private var installerSessionUnlockedTimestamp: Long = 0L
+
     companion object {
         @Volatile
         private var instance: AppLockManager? = null
@@ -127,6 +131,7 @@ class AppLockManager private constructor(private val context: Context) {
         private const val SYSTEM_PICKER_GRACE_MS = 3000L
         private const val RECENTS_GRACE_WINDOW_MS = 1200L
         private const val IME_CACHE_TTL_MS = 30000L
+        private const val INSTALLER_SESSION_WINDOW_MS = 45000L
 
         val KNOWN_IME_PACKAGES = setOf(
             "com.google.android.inputmethod.latin", // Gboard
@@ -388,6 +393,7 @@ class AppLockManager private constructor(private val context: Context) {
         if (packageName == context.packageName) return false
         if (isSystemPickerBypassActive()) return false
         if (isSystemDocumentOrMediaPicker(packageName)) return false
+        if (isPackageInstaller(packageName) && isInstallerSessionUnlocked()) return false
         if (isTransientSystemOrOverlayPackage(packageName)) return false
         if (isLauncherOrSystemUI(packageName)) return false
         if (isRecentsOverviewActive || isRecentsOrOverview(packageName, className)) return false
@@ -436,6 +442,32 @@ class AppLockManager private constructor(private val context: Context) {
     fun onPackageUnlocked(packageName: String) {
         unlockedPackages.add(packageName)
         preferences.resetFailedAttempts()
+        if (isPackageInstaller(packageName)) {
+            unlockInstallerSession()
+        }
+    }
+
+    /**
+     * Authorizes an ongoing package installation or update session across multiple activity transitions.
+     */
+    fun unlockInstallerSession() {
+        installerSessionUnlockedTimestamp = System.currentTimeMillis()
+    }
+
+    /**
+     * Checks if a package installation or update session is currently authorized.
+     */
+    fun isInstallerSessionUnlocked(): Boolean {
+        val now = System.currentTimeMillis()
+        val elapsed = now - installerSessionUnlockedTimestamp
+        return installerSessionUnlockedTimestamp > 0L && elapsed in 0L..INSTALLER_SESSION_WINDOW_MS
+    }
+
+    /**
+     * Resets the active package installation session.
+     */
+    fun clearInstallerSession() {
+        installerSessionUnlockedTimestamp = 0L
     }
 
     /**
@@ -446,6 +478,7 @@ class AppLockManager private constructor(private val context: Context) {
         pendingInterceptedTargets.clear()
         pendingExitPackage = null
         pendingExitTimestamp = 0L
+        installerSessionUnlockedTimestamp = 0L
         isRecentsOverviewActive = false
     }
 
@@ -457,6 +490,7 @@ class AppLockManager private constructor(private val context: Context) {
         pendingInterceptedTargets.clear()
         pendingExitPackage = null
         pendingExitTimestamp = 0L
+        installerSessionUnlockedTimestamp = 0L
         isRecentsOverviewActive = false
         invalidateLauncherCache()
     }

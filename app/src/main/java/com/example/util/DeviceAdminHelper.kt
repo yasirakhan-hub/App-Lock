@@ -20,9 +20,19 @@ object DeviceAdminHelper {
      * Defensively queries system service to prevent crashes across customized OEM ROMs and Android versions.
      */
     fun isDeviceAdminActive(context: Context): Boolean {
+        val appContext = context.applicationContext ?: context
         return try {
-            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return false
-            dpm.isAdminActive(getComponentName(context))
+            val dpm = appContext.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return false
+            val adminComponent = getComponentName(appContext)
+            if (dpm.isAdminActive(adminComponent)) {
+                return true
+            }
+            val activeAdmins = dpm.activeAdmins
+            if (activeAdmins != null) {
+                activeAdmins.any { it.packageName == appContext.packageName && it.className == adminComponent.className }
+            } else {
+                false
+            }
         } catch (_: SecurityException) {
             false
         } catch (_: Exception) {

@@ -119,6 +119,9 @@ class LockActivity : FragmentActivity() {
                     isTestMode = isTestMode,
                     onUnlockSuccess = {
                         if (!isTestMode && targetPackage.isNotBlank()) {
+                            if (targetPackage == packageName) {
+                                appLockManager.onSelfAppInfoUnlocked()
+                            }
                             appLockManager.onPackageUnlocked(targetPackage)
                             // For Self App Info, just finish LockActivity so user lands directly on App Info
                             if (targetPackage != packageName) {
