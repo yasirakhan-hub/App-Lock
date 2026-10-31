@@ -1,4 +1,3 @@
-
 name: Build AppLock APK
 
 on:
@@ -35,32 +34,51 @@ jobs:
             exit 1
           fi
 
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/smart-applock-release.jks"
+          # Strip whitespace and line breaks before decoding to prevent EOFException from premature truncation
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/smart-applock-release.jks"
           chmod 600 "$RUNNER_TEMP/smart-applock-release.jks"
 
           if [ ! -s "$RUNNER_TEMP/smart-applock-release.jks" ]; then
-            echo "ERROR: Keystore restoration failed."
+            echo "ERROR: Keystore restoration failed. Restored file is empty."
             exit 1
           fi
-      
+
+      - name: Safe keystore diagnostics
+        run: |
+          set -euo pipefail
+          KEYSTORE_FILE="$RUNNER_TEMP/smart-applock-release.jks"
+          echo "Keystore file details:"
+          ls -l "$KEYSTORE_FILE"
+          echo "Keystore SHA-256 hash:"
+          sha256sum "$KEYSTORE_FILE"
+
       - name: Verify permanent signing keystore
         env:
-          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           set -euo pipefail
-          keytool -list \
-            -keystore "$RUNNER_TEMP/smart-applock-release.jks" \
-            -storepass "$STORE_PASSWORD"
-            
-            ls -l "$RUNNER_TEMP/smart-applock-release.jks"
-sha256sum "$RUNNER_TEMP/smart-applock-release.jks"
 
+          if [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "ERROR: KEYSTORE_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$KEY_ALIAS" ]; then
+            echo "ERROR: KEY_ALIAS secret is missing."
+            exit 1
+          fi
+
+          KEYSTORE_FILE="$RUNNER_TEMP/smart-applock-release.jks"
+
+          echo "Verifying keystore integrity and alias '${KEY_ALIAS}'..."
           keytool -list \
-            -keystore "$RUNNER_TEMP/smart-applock-release.jks" \
-            -storepass "$STORE_PASSWORD" \
-            -alias "$KEY_ALIAS"
-            
+            -keystore "$KEYSTORE_FILE" \
+            -storepass:env KEYSTORE_PASSWORD \
+            -alias "$KEY_ALIAS" > /dev/null
+
+          echo "Keystore validation succeeded: Key alias '${KEY_ALIAS}' verified."
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -73,9 +91,9 @@ sha256sum "$RUNNER_TEMP/smart-applock-release.jks"
         run: |
           set -euo pipefail
 
-          test -n "$STORE_PASSWORD" || { echo "Missing KEYSTORE_PASSWORD"; exit 1; }
-          test -n "$KEY_ALIAS" || { echo "Missing KEY_ALIAS"; exit 1; }
-          test -n "$KEY_PASSWORD" || { echo "Missing KEY_PASSWORD"; exit 1; }
+          test -n "$STORE_PASSWORD" || { echo "ERROR: Missing KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "ERROR: Missing KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "ERROR: Missing KEY_PASSWORD"; exit 1; }
 
           chmod +x gradlew
           ./gradlew clean assembleRelease --no-daemon
@@ -91,4 +109,3 @@ sha256sum "$RUNNER_TEMP/smart-applock-release.jks"
       - name: Remove temporary keystore
         if: always()
         run: rm -f "$RUNNER_TEMP/smart-applock-release.jks"
-
