@@ -75,7 +75,7 @@ jobs:
           keytool -list \
             -keystore "$KEYSTORE_FILE" \
             -storepass:env KEYSTORE_PASSWORD \
-            -alias "$KEY_ALIAS" > /dev/null
+            -alias "$KEY_ALIAS"
 
           echo "Keystore validation succeeded: Key alias '${KEY_ALIAS}' verified."
 
