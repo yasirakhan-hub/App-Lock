@@ -18,14 +18,17 @@ class AppLockDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
+        DeviceAdminHelper.setUninstallBlockedIfSupported(context, true)
         DeviceAdminHelper.notifyAdminStatusChanged(context)
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
         try {
-            val appLockManager = AppLockManager.getInstance(context)
-            // Immediately launch lock screen over the deactivation screen
-            appLockManager.launchLockScreen(context.packageName)
+            // Only launch lock screen if deactivation was not already authenticated
+            if (!DeviceAdminHelper.consumeDeactivationAuthorized()) {
+                val appLockManager = AppLockManager.getInstance(context)
+                appLockManager.launchLockScreen(context.packageName)
+            }
         } catch (_: Exception) {
         }
         return "SECURITY WARNING: Deactivating administrator privileges will remove uninstall and force-stop protection. Master PIN is required to authorize this change."

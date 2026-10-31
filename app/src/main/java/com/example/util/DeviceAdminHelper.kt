@@ -17,6 +17,25 @@ object DeviceAdminHelper {
     private val _adminStatusFlow = MutableStateFlow<Boolean?>(null)
     val adminStatusFlow: StateFlow<Boolean?> = _adminStatusFlow.asStateFlow()
 
+    @Volatile
+    private var deactivationAuthorizedTimestamp: Long = 0L
+
+    fun setDeactivationAuthorized(authorized: Boolean) {
+        deactivationAuthorizedTimestamp = if (authorized) System.currentTimeMillis() else 0L
+    }
+
+    fun isDeactivationAuthorized(): Boolean {
+        val now = System.currentTimeMillis()
+        val elapsed = now - deactivationAuthorizedTimestamp
+        return deactivationAuthorizedTimestamp > 0L && elapsed in 0L..15000L
+    }
+
+    fun consumeDeactivationAuthorized(): Boolean {
+        val authorized = isDeactivationAuthorized()
+        deactivationAuthorizedTimestamp = 0L
+        return authorized
+    }
+
     /**
      * Notifies all observers that the Device Administrator activation status has changed.
      */
@@ -163,11 +182,15 @@ object DeviceAdminHelper {
     fun deactivateDeviceAdmin(context: Context): Boolean {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return false
         return try {
+            setDeactivationAuthorized(true)
             dpm.removeActiveAdmin(getComponentName(context))
+            notifyAdminStatusChanged(context)
             !isDeviceAdminActive(context)
         } catch (_: SecurityException) {
+            setDeactivationAuthorized(false)
             false
         } catch (_: Exception) {
+            setDeactivationAuthorized(false)
             false
         }
     }

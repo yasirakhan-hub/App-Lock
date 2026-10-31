@@ -226,6 +226,14 @@ class AppLockManager private constructor(private val context: Context) {
     }
 
     /**
+     * Called when the user explicitly taps and resumes an application from the Recent Apps overview.
+     */
+    fun onAppLaunchedFromRecents(packageName: String) {
+        isRecentsOverviewActive = false
+        lastRecentsOverviewTimestamp = 0L
+    }
+
+    /**
      * Called whenever a foreground window state change is detected by the AccessibilityService.
      */
     fun onForegroundPackageChanged(newPackage: String, className: String? = null, launchContext: Context? = null) {
@@ -268,6 +276,7 @@ class AppLockManager private constructor(private val context: Context) {
         // 3. User is on Home screen or Launcher:
         if (isLauncher) {
             isRecentsOverviewActive = false
+            lastRecentsOverviewTimestamp = 0L
             currentForegroundPackage = newPackage
             lastLauncherExitTimestamp = System.currentTimeMillis()
 
@@ -283,8 +292,12 @@ class AppLockManager private constructor(private val context: Context) {
             return
         }
 
-        // 4. We are entering a real application (e.g., Instagram, WhatsApp, Banking app, Settings, etc.):
-        isRecentsOverviewActive = false
+        // 4. If Recent Apps overview is currently active, background task card views
+        // must NEVER trigger authentication!
+        if (isRecentsOverviewActive) {
+            return
+        }
+
         val now = System.currentTimeMillis()
 
         // If user switched directly to a DIFFERENT real app (App A -> App B):
@@ -584,11 +597,19 @@ class AppLockManager private constructor(private val context: Context) {
     fun isRecentsOrOverview(packageName: String, className: String?): Boolean {
         if (className != null) {
             val lower = className.lowercase()
-            if (lower.contains("recents") || lower.contains("quickstep") || lower.contains("overview")) {
+            if (lower.contains("recents") ||
+                lower.contains("quickstep") ||
+                lower.contains("overview") ||
+                lower.contains("taskview") ||
+                lower.contains("taskswitcher") ||
+                lower.contains("recenttask")
+            ) {
                 return true
             }
         }
-        return false
+        val pkgLower = packageName.lowercase()
+        return pkgLower.contains("recents") ||
+                pkgLower == "com.android.systemui.recents"
     }
 
     /**

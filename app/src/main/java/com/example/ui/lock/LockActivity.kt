@@ -118,13 +118,16 @@ class LockActivity : FragmentActivity() {
                     targetAppIcon = appIcon,
                     isTestMode = isTestMode,
                     onUnlockSuccess = {
+                        if (isDeactivateAdmin) {
+                            com.example.util.DeviceAdminHelper.setDeactivationAuthorized(true)
+                        }
                         if (!isTestMode && targetPackage.isNotBlank()) {
                             if (targetPackage == packageName) {
                                 appLockManager.onSelfAppInfoUnlocked()
                             }
                             appLockManager.onPackageUnlocked(targetPackage)
-                            // For Self App Info, just finish LockActivity so user lands directly on App Info
-                            if (targetPackage != packageName) {
+                            // For Self App Info or Admin Deactivation, just finish LockActivity so user lands directly on target
+                            if (targetPackage != packageName && !isDeactivateAdmin) {
                                 appLockManager.launchInterceptedTarget(this@LockActivity, targetPackage)
                             }
                         }

@@ -1070,6 +1070,107 @@ class ExampleRobolectricTest {
         appLockManager.onScreenOff()
         assertFalse("Screen off must invalidate self App Info session", appLockManager.isSelfAppInfoUnlocked())
     }
+
+    @Test
+    fun testLockedAppImmediateAuthenticationTriggerAndTransientFilter() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.savePin("1234")
+        preferences.setProtectionEnabled(true)
+        val protectedApp = "com.sample.banking"
+        preferences.setPackageProtected(protectedApp, true)
+
+        val service = com.example.service.AppLockAccessibilityService()
+
+        // 1. Verify FrameLayout is NOT treated as transient
+        assertFalse("FrameLayout must not be ignored as transient UI element",
+            service.isTransientUiElement("android.widget.FrameLayout"))
+        assertTrue("Toast must be identified as transient",
+            service.isTransientUiElement("android.widget.Toast"))
+        assertTrue("PopupWindow must be identified as transient",
+            service.isTransientUiElement("android.widget.PopupWindow"))
+
+        // 2. Launching a locked app with FrameLayout decor view or Activity must require authentication immediately
+        assertTrue("Opening locked app with FrameLayout root must require authentication immediately",
+            appLockManager.shouldLock(protectedApp, "android.widget.FrameLayout"))
+        assertTrue("Opening locked app with Activity class must require authentication",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.MainActivity"))
+
+        // 3. Normal navigation inside unlocked app does not repeatedly prompt
+        appLockManager.onPackageUnlocked(protectedApp)
+        assertFalse("Navigating within unlocked app must not re-prompt authentication",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.DetailActivity"))
+    }
+
+    @Test
+    fun testRecentAppsOverviewDoesNotTriggerAuthenticationForBackgroundApps() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.savePin("1234")
+        preferences.setProtectionEnabled(true)
+        val protectedApp = "com.sample.banking"
+        preferences.setPackageProtected(protectedApp, true)
+
+        // User enters Recent Apps overview
+        appLockManager.onRecentsOverviewEntered()
+        assertTrue("Recents overview must be active", appLockManager.isRecentsOverviewActive)
+
+        // While in Recents, task cards for background apps must NEVER trigger authentication
+        assertFalse("Recent Apps overview must never trigger authentication for background apps",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.MainActivity"))
+
+        // Simulating event arriving for background card in recents -> must not lock or change foreground
+        appLockManager.onForegroundPackageChanged(protectedApp, "com.sample.banking.MainActivity")
+        assertTrue("Recents overview remains active during card inspection", appLockManager.isRecentsOverviewActive)
+
+        // When user explicitly taps the card to resume the app:
+        appLockManager.onAppLaunchedFromRecents(protectedApp)
+        assertFalse("Recents overview state cleared on app launch", appLockManager.isRecentsOverviewActive)
+        assertTrue("Resuming locked app from Recents requires authentication",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.MainActivity"))
+    }
+
+    @Test
+    fun testDeviceAdminSinglePromptDeactivationFlow() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        val receiver = com.example.receiver.AppLockDeviceAdminReceiver()
+        val dummyIntent = android.content.Intent()
+
+        // 1. When deactivation is initiated from in-app settings (authorized first):
+        com.example.util.DeviceAdminHelper.setDeactivationAuthorized(true)
+        assertTrue(com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
+
+        // In onDisableRequested, the authorization must be consumed so no secondary lock screen is launched
+        val warning1 = receiver.onDisableRequested(context, dummyIntent)
+        assertTrue(warning1.isNotEmpty())
+        assertFalse("Authorization must be consumed so no duplicate screen is prompted",
+            com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
+
+        // 2. When deactivation is requested externally (e.g. Android Settings) without in-app authorization:
+        val warning2 = receiver.onDisableRequested(context, dummyIntent)
+        assertTrue(warning2.isNotEmpty())
+        assertFalse(com.example.util.DeviceAdminHelper.isDeactivationAuthorized())
+    }
+
+    @Test
+    fun testDeviceAdminPoliciesXmlAudit() {
+        // Parse device_admin_policies.xml to verify uses-policies declaration
+        val parser = context.resources.getXml(com.example.R.xml.device_admin_policies)
+        val foundPolicies = mutableListOf<String>()
+        var eventType = parser.eventType
+        while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+            if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG) {
+                val tag = parser.name
+                if (tag != "device-admin" && tag != "uses-policies") {
+                    foundPolicies.add(tag)
+                }
+            }
+            eventType = parser.next()
+        }
+
+        assertTrue("device-admin must declare force-lock policy", foundPolicies.contains("force-lock"))
+        assertTrue("device-admin must declare watch-login policy", foundPolicies.contains("watch-login"))
+        assertFalse("wipe-data policy must NEVER be declared", foundPolicies.contains("wipe-data"))
+        assertFalse("reset-password policy must not be declared", foundPolicies.contains("reset-password"))
+    }
 }
 
 

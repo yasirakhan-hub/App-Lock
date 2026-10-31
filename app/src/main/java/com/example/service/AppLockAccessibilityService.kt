@@ -85,16 +85,36 @@ class AppLockAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Active window inspection:
+        // Distinguish actual foreground app launches from background task cards shown in Recent Apps.
+        val activeRoot = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        }
+        val activePkg = activeRoot?.packageName?.toString()
+
+        if (activePkg != null && activePkg != pkgName) {
+            // If the active focused window belongs to Launcher, System UI, or Recent Apps overview,
+            // the user is NOT actively inside pkgName (it's just a background card or transition).
+            if (appLockManager.isLauncherOrSystemUI(activePkg) ||
+                appLockManager.isRecentsOrOverview(activePkg, null) ||
+                appLockManager.isRecentsOverviewActive
+            ) {
+                return
+            }
+        } else if (activePkg != null && activePkg == pkgName) {
+            // User explicitly tapped and brought pkgName to the active foreground from Recents:
+            if (appLockManager.isRecentsOverviewActive && !appLockManager.isLauncherOrSystemUI(pkgName)) {
+                appLockManager.onAppLaunchedFromRecents(pkgName)
+            }
+        }
+
         // 3. Package Installer Handling (Installation / Update vs Uninstall Protection):
         // Intercept Package Installer when attempting to uninstall Smart AppLock,
         // while allowing legitimate installation and update flows once authenticated without looping.
         if (appLockManager.isPackageInstaller(pkgName)) {
-            val appName = getString(com.example.R.string.app_name)
-            val isUninstallingSelf = event.text?.any { text ->
-                text.contains(appName, ignoreCase = true) || text.contains(packageName, ignoreCase = true)
-            } ?: false
-
-            if (isUninstallingSelf) {
+            if (isPackageInstallerUninstallingSelf(pkgName, className, event)) {
                 if (!appLockManager.isSelfAppInfoUnlocked()) {
                     appLockManager.launchLockScreen(pkgName, className, this)
                 }
@@ -226,14 +246,68 @@ class AppLockAccessibilityService : AccessibilityService() {
                 lower.contains("lockscreen")
     }
 
-    private fun isTransientUiElement(className: String?): Boolean {
+    internal fun isTransientUiElement(className: String?): Boolean {
         if (className == null) return false
         val lower = className.lowercase()
         return lower.contains("inputmethod") ||
                 lower.contains("toast") ||
                 lower.contains("popupwindow") ||
-                lower.contains("volume") ||
-                className == "android.widget.FrameLayout"
+                lower.contains("volume")
+    }
+
+    internal fun isPackageInstallerUninstallingSelf(
+        pkgName: String,
+        className: String?,
+        event: AccessibilityEvent
+    ): Boolean {
+        if (!appLockManager.isPackageInstaller(pkgName)) return false
+
+        val appName = getString(com.example.R.string.app_name)
+        val targetPackage = packageName
+
+        // 1. Direct text/contentDescription inspection
+        val matchesText = event.text?.any { text ->
+            val str = text.toString()
+            str.contains(appName, ignoreCase = true) ||
+            str.contains(targetPackage, ignoreCase = true) ||
+            str.contains("secjkv", ignoreCase = true)
+        } ?: false
+
+        val contentDesc = event.contentDescription?.toString()
+        val matchesDesc = contentDesc != null && (
+            contentDesc.contains(appName, ignoreCase = true) ||
+            contentDesc.contains(targetPackage, ignoreCase = true) ||
+            contentDesc.contains("secjkv", ignoreCase = true)
+        )
+
+        if (matchesText || matchesDesc) return true
+
+        // 2. Deep node inspection for dialog text
+        val rootNode = try {
+            rootInActiveWindow ?: event.source
+        } catch (_: Exception) {
+            null
+        }
+
+        if (rootNode != null) {
+            try {
+                val appNameNodes = rootNode.findAccessibilityNodeInfosByText(appName)
+                val pkgNodes = rootNode.findAccessibilityNodeInfosByText("secjkv")
+                val hasIdentifier = !appNameNodes.isNullOrEmpty() || !pkgNodes.isNullOrEmpty()
+
+                val uninstallNodes = rootNode.findAccessibilityNodeInfosByText("uninstall")
+                val deleteNodes = rootNode.findAccessibilityNodeInfosByText("delete")
+                val okNodes = rootNode.findAccessibilityNodeInfosByText("OK")
+                val hasUninstallCue = !uninstallNodes.isNullOrEmpty() || !deleteNodes.isNullOrEmpty() || !okNodes.isNullOrEmpty()
+
+                if (hasIdentifier && hasUninstallCue) {
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        return false
     }
 
     override fun onInterrupt() {
