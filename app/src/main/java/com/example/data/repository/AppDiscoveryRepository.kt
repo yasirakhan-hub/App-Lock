@@ -29,6 +29,14 @@ class AppDiscoveryRepository(private val context: Context) {
         // across screens (Dashboard, AppSelection, LockActivity).
         private val sharedIconCache = ConcurrentHashMap<String, ImageBitmap>()
 
+        // Process-wide thread-safe cache for app labels to eliminate synchronous PackageManager
+        // Binder IPC calls on every LockActivity foreground launch and repeated list queries.
+        private val sharedAppNameCache = ConcurrentHashMap<String, String>()
+
+        fun clearSharedAppNameCache() {
+            sharedAppNameCache.clear()
+        }
+
         fun clearSharedIconCache() {
             sharedIconCache.clear()
         }
@@ -99,10 +107,17 @@ class AppDiscoveryRepository(private val context: Context) {
                 if (seenPackages.contains(pkgName)) continue
                 seenPackages.add(pkgName)
 
-                val label = try {
-                    resolveInfo.loadLabel(packageManager).toString()
-                } catch (e: Exception) {
-                    pkgName
+                val cachedLabel = sharedAppNameCache[pkgName]
+                val label = if (cachedLabel != null) {
+                    cachedLabel
+                } else {
+                    val resolvedLabel = try {
+                        resolveInfo.loadLabel(packageManager).toString()
+                    } catch (e: Exception) {
+                        pkgName
+                    }
+                    sharedAppNameCache[pkgName] = resolvedLabel
+                    resolvedLabel
                 }
 
                 val appInfo = resolveInfo.activityInfo.applicationInfo
@@ -156,14 +171,22 @@ class AppDiscoveryRepository(private val context: Context) {
 
     /**
      * Finds App label by package name.
+     * Caches resolved app labels in memory to eliminate synchronous PackageManager
+     * Binder IPC calls from the main thread during LockActivity onCreate.
      */
     fun getAppName(packageName: String): String {
-        return try {
+        val cached = sharedAppNameCache[packageName]
+        if (cached != null) {
+            return cached
+        }
+        val label = try {
             val info = packageManager.getApplicationInfo(packageName, 0)
             packageManager.getApplicationLabel(info).toString()
         } catch (e: Exception) {
             packageName
         }
+        sharedAppNameCache[packageName] = label
+        return label
     }
 
     /**

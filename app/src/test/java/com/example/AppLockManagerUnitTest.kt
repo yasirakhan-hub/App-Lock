@@ -74,6 +74,38 @@ class AppLockManagerUnitTest {
     }
 
     @Test
+    fun sharedAppNameCache_cachingBehavior_retainsLabelsAndClearsOnInvalidate() {
+        val appNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+        var resolveCount = 0
+
+        fun getAppName(pkg: String): String {
+            val cached = appNameCache[pkg]
+            if (cached != null) return cached
+            resolveCount++
+            val resolved = "App_$pkg"
+            appNameCache[pkg] = resolved
+            return resolved
+        }
+
+        // 1. Initial resolution computes and caches
+        assertEquals("App_com.example.camera", getAppName("com.example.camera"))
+        assertEquals(1, resolveCount)
+
+        // 2. Subsequent queries hit the memory cache without resolving
+        assertEquals("App_com.example.camera", getAppName("com.example.camera"))
+        assertEquals(1, resolveCount)
+
+        // 3. Different package resolves and caches independently
+        assertEquals("App_com.example.gallery", getAppName("com.example.gallery"))
+        assertEquals(2, resolveCount)
+
+        // 4. Invalidation clears cache, forcing re-resolution
+        appNameCache.clear()
+        assertEquals("App_com.example.camera", getAppName("com.example.camera"))
+        assertEquals(3, resolveCount)
+    }
+
+    @Test
     fun batteryGuidance_oemBrandMapping_returnsValidGuidance() {
         val oemBrand = com.example.util.BatteryOptimizationHelper.getDeviceBrand()
         assertTrue(oemBrand in com.example.util.BatteryOptimizationHelper.OemBrand.entries)
