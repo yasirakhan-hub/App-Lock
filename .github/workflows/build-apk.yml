@@ -52,6 +52,9 @@ jobs:
           keytool -list \
             -keystore "$RUNNER_TEMP/smart-applock-release.jks" \
             -storepass "$STORE_PASSWORD"
+            
+            ls -l "$RUNNER_TEMP/smart-applock-release.jks"
+sha256sum "$RUNNER_TEMP/smart-applock-release.jks"
 
           keytool -list \
             -keystore "$RUNNER_TEMP/smart-applock-release.jks" \
