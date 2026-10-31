@@ -1538,8 +1538,8 @@ private fun SecurityLimitationsDialog(onDismiss: () -> Unit) {
                 Text("How AppLock Works:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = NeoPalette.TextPrimary)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "• Uses Android AccessibilityService (TYPE_WINDOW_STATE_CHANGED) to detect which app window transitions to the foreground.\n" +
-                    "• Configured with canRetrieveWindowContent=\"false\" to strictly guarantee zero access to on-screen text or private data.\n" +
+                    "• Uses Android AccessibilityService to detect which app window transitions to the foreground.\n" +
+                    "• Window inspection is strictly restricted to verifying package titles for self App Info protection and anti-tamper security.\n" +
                     "• Files inside Hide Files are encrypted with AES-256-GCM backed by Android Keystore.",
                     style = MaterialTheme.typography.bodySmall,
                     color = NeoPalette.TextSecondary
