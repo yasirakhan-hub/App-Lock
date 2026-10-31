@@ -105,24 +105,9 @@ jobs:
             cat "$RUNNER_TEMP/keystore_details.txt"
           else
             echo "::error::Keystore verification failed for alias '${TARGET_ALIAS}' with STORE_PASSWORD."
-            cat << 'EOF'
-
-================================================================================
-DIAGNOSTIC GUIDANCE:
-If keytool failed with "java.io.EOFException":
-  The keystore binary payload in ANDROID_KEYSTORE_BASE64 was truncated or corrupted
-  when copied into GitHub Secrets.
-  To resolve safely:
-    1. Locate your original permanent keystore (.jks or .p12).
-    2. Encode it with no line wraps:
-       base64 -w 0 <path-to-keystore> | pbcopy (or xclip / clip.exe)
-    3. Update repository secret ANDROID_KEYSTORE_BASE64 with the full string.
-If keytool failed with "Keystore was tampered with, or password was incorrect":
-    Update KEYSTORE_PASSWORD or KEY_PASSWORD with the correct keystore password.
-If keytool failed with "Alias <alias> does not exist":
-    Ensure KEY_ALIAS matches the alias inside your keystore (or ensure it is 'smart-applock').
-================================================================================
-EOF
+            echo "Guidance: If verification failed with EOFException, ensure ANDROID_KEYSTORE_BASE64 was encoded with base64 -w 0."
+            echo "Guidance: If verification failed with password error, check KEYSTORE_PASSWORD or KEY_PASSWORD secret."
+            echo "Guidance: If verification failed with alias error, ensure KEY_ALIAS matches 'smart-applock'."
             exit 1
           fi
 
