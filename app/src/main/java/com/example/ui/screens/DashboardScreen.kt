@@ -552,10 +552,7 @@ fun DashboardScreen(
                 isGranted = isDeviceAdminActive,
                 actionLabel = "Activate Admin",
                 onAction = {
-                    try {
-                        context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
-                    } catch (_: Exception) {
-                    }
+                    DeviceAdminHelper.openDeviceAdminActivation(context)
                 },
                 testTag = "perm_device_admin_card"
             )

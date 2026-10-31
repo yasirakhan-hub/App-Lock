@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,6 +71,9 @@ import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Pin
 import androidx.compose.ui.text.style.TextAlign
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.security.AppLockPreferences
 import com.example.data.security.AppLockPreferences.AuthMethod
 import com.example.ui.common.AuthChallengeDialog
@@ -125,6 +129,22 @@ fun SettingsScreen(
     var showAuthForCalcSecret by remember { mutableStateOf(false) }
     var pendingCalcDisguiseToggle by remember { mutableStateOf<Boolean?>(null) }
     var pendingRelockPolicy by remember { mutableStateOf<Boolean?>(null) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
+                isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
+                isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+                activeAuthMethod = preferences.getAuthMethod()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     LaunchedEffect(Unit) {
         isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
@@ -474,10 +494,7 @@ fun SettingsScreen(
                     if (isDeviceAdminActive) {
                         showAuthForDeactivateAdmin = true
                     } else {
-                        try {
-                            context.startActivity(DeviceAdminHelper.createAddDeviceAdminIntent(context))
-                        } catch (_: Exception) {
-                        }
+                        DeviceAdminHelper.openDeviceAdminActivation(context)
                     }
                 },
                 testTag = "settings_device_admin_row"
@@ -662,7 +679,7 @@ fun SettingsScreen(
                 preferences = preferences,
                 onAuthorized = {
                     DeviceAdminHelper.deactivateDeviceAdmin(context)
-                    isDeviceAdminActive = false
+                    isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
                     showAuthForDeactivateAdmin = false
                 },
                 onDismiss = { showAuthForDeactivateAdmin = false }
