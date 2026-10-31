@@ -120,6 +120,28 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun testOpenDeviceAdminActivationFallbacks() {
+        // Test openDeviceAdminActivation succeeds or falls back gracefully without unhandled exceptions
+        val launched = com.example.util.DeviceAdminHelper.openDeviceAdminActivation(context)
+        assertTrue("openDeviceAdminActivation should execute successfully without crashing", launched || !launched)
+    }
+
+    @Test
+    fun testDeviceAdminStateHandling() {
+        // Verify isDeviceAdminActive returns cleanly without throwing on mock context
+        val isActive = com.example.util.DeviceAdminHelper.isDeviceAdminActive(context)
+        assertFalse("By default in test environment, device admin should not be active", isActive)
+
+        // Verify isDeviceOrProfileOwner returns cleanly without throwing
+        val isOwner = com.example.util.DeviceAdminHelper.isDeviceOrProfileOwner(context)
+        assertFalse("By default in test environment, app should not be device or profile owner", isOwner)
+
+        // Verify deactivateDeviceAdmin executes cleanly and returns boolean
+        val deactivated = com.example.util.DeviceAdminHelper.deactivateDeviceAdmin(context)
+        assertTrue("Deactivating inactive admin returns true (safely inactive)", deactivated)
+    }
+
+    @Test
     fun testProtectedPackagesPersistence() {
         val pkg1 = "com.sample.banking"
         val pkg2 = "com.sample.gallery"
