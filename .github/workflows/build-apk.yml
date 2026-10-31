@@ -29,17 +29,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "ERROR: ANDROID_KEYSTORE_BASE64 secret is missing."
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing or empty in repository secrets."
             exit 1
           fi
 
-          # Strip whitespace and line breaks before decoding to prevent EOFException from premature truncation
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/smart-applock-release.jks"
-          chmod 600 "$RUNNER_TEMP/smart-applock-release.jks"
+          KEYSTORE_FILE="$RUNNER_TEMP/smart-applock-release.jks"
 
-          if [ ! -s "$RUNNER_TEMP/smart-applock-release.jks" ]; then
-            echo "ERROR: Keystore restoration failed. Restored file is empty."
+          # Clean potential line breaks/carriage returns and decode
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n[:space:]' | base64 --decode > "$KEYSTORE_FILE"
+          chmod 600 "$KEYSTORE_FILE"
+
+          FILE_SIZE=$(wc -c < "$KEYSTORE_FILE" | tr -d '[:space:]')
+          if [ "$FILE_SIZE" -eq 0 ]; then
+            echo "::error::Restored keystore file is 0 bytes. Check ANDROID_KEYSTORE_BASE64 secret formatting."
             exit 1
           fi
 
@@ -47,10 +50,23 @@ jobs:
         run: |
           set -euo pipefail
           KEYSTORE_FILE="$RUNNER_TEMP/smart-applock-release.jks"
-          echo "Keystore file details:"
-          ls -l "$KEYSTORE_FILE"
-          echo "Keystore SHA-256 hash:"
-          sha256sum "$KEYSTORE_FILE"
+          FILE_SIZE=$(wc -c < "$KEYSTORE_FILE" | tr -d '[:space:]')
+          FILE_SHA256=$(sha256sum "$KEYSTORE_FILE" | awk '{print $1}')
+          MAGIC_HEX=$(od -An -N4 -tx1 "$KEYSTORE_FILE" | tr -d '[:space:]')
+
+          echo "================ Keystore Diagnostics ================"
+          echo "File size: ${FILE_SIZE} bytes"
+          echo "SHA-256 hash: ${FILE_SHA256}"
+          echo "Header magic bytes (hex): ${MAGIC_HEX}"
+
+          if [ "$MAGIC_HEX" = "feedfeed" ]; then
+            echo "Detected format: Java KeyStore (JKS)"
+          elif [ "${MAGIC_HEX:0:2}" = "30" ]; then
+            echo "Detected format: PKCS12"
+          else
+            echo "::warning::Unrecognized keystore header format (${MAGIC_HEX}). A standard JKS starts with 'feedfeed' and PKCS12 starts with '30'."
+          fi
+          echo "======================================================="
 
       - name: Verify permanent signing keystore
         env:
@@ -62,32 +78,80 @@ jobs:
 
           KEYSTORE_FILE="$RUNNER_TEMP/smart-applock-release.jks"
           TARGET_ALIAS="${KEY_ALIAS:-smart-applock}"
+          MAGIC_HEX=$(od -An -N4 -tx1 "$KEYSTORE_FILE" | tr -d '[:space:]')
+
+          # Determine keystore type dynamically or allow keytool autodetect
+          KEYTOOL_TYPE_FLAGS=()
+          if [ "$MAGIC_HEX" = "feedfeed" ]; then
+            KEYTOOL_TYPE_FLAGS=("-storetype" "JKS")
+          elif [ "${MAGIC_HEX:0:2}" = "30" ]; then
+            KEYTOOL_TYPE_FLAGS=("-storetype" "PKCS12")
+          fi
 
           echo "Verifying keystore integrity and alias '${TARGET_ALIAS}'..."
 
           STORE_PASS_ENV=""
-          if [ -n "${KEYSTORE_PASSWORD:-}" ] && keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
+          if [ -n "${KEYSTORE_PASSWORD:-}" ] && keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
             STORE_PASS_ENV="KEYSTORE_PASSWORD"
-          elif [ -n "${KEY_PASSWORD:-}" ] && keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
+          elif [ -n "${KEY_PASSWORD:-}" ] && keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
             STORE_PASS_ENV="KEY_PASSWORD"
           fi
 
           if [ -n "$STORE_PASS_ENV" ]; then
             echo "Keystore password verified using environment variable: ${STORE_PASS_ENV}."
-            keytool -list -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS"
+            keytool -list -v "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS"
           else
-            echo "Keystore verification failed. Testing primary password with diagnostics output:"
+            echo "::error::Keystore verification failed for alias '${TARGET_ALIAS}'."
+            echo "Testing diagnostic output with configured credentials (without exposing values):"
+
             if [ -n "${KEYSTORE_PASSWORD:-}" ]; then
-              keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" || true
-            elif [ -n "${KEY_PASSWORD:-}" ]; then
-              keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" || true
-            else
-              echo "ERROR: Neither KEYSTORE_PASSWORD nor KEY_PASSWORD secret is configured."
+              echo "Testing KEYSTORE_PASSWORD:"
+              keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" || true
             fi
+            if [ -n "${KEY_PASSWORD:-}" ]; then
+              echo "Testing KEY_PASSWORD:"
+              keytool -list "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" || true
+            fi
+            if [ -z "${KEYSTORE_PASSWORD:-}" ] && [ -z "${KEY_PASSWORD:-}" ]; then
+              echo "::error::Neither KEYSTORE_PASSWORD nor KEY_PASSWORD secret is configured in repository secrets."
+            fi
+
+            cat << 'EOF'
+
+================================================================================
+DIAGNOSTIC GUIDANCE:
+If keytool failed with "java.io.EOFException":
+  The keystore binary payload in ANDROID_KEYSTORE_BASE64 was truncated or corrupted
+  when copied into GitHub Secrets.
+  To resolve safely:
+    1. Locate your original permanent keystore (.jks or .p12).
+    2. Encode it with no line wraps:
+       base64 -w 0 <path-to-keystore> | pbcopy (or xclip / clip.exe)
+    3. Update repository secret ANDROID_KEYSTORE_BASE64 with the full string.
+If keytool failed with "Keystore was tampered with, or password was incorrect":
+    Update KEYSTORE_PASSWORD or KEY_PASSWORD with the correct keystore password.
+If keytool failed with "Alias <alias> does not exist":
+    Ensure KEY_ALIAS matches the alias inside your keystore (or ensure it is 'smart-applock').
+================================================================================
+EOF
             exit 1
           fi
 
           echo "Keystore validation succeeded: Key alias '${TARGET_ALIAS}' verified."
+
+          # Verify private key access using certreq
+          KEY_PASS_ENV=""
+          if [ -n "${KEY_PASSWORD:-}" ] && keytool -certreq "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS" -keypass:env KEY_PASSWORD > /dev/null 2>&1; then
+            KEY_PASS_ENV="KEY_PASSWORD"
+          elif [ -n "${KEYSTORE_PASSWORD:-}" ] && keytool -certreq "${KEYTOOL_TYPE_FLAGS[@]}" -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS" -keypass:env KEYSTORE_PASSWORD > /dev/null 2>&1; then
+            KEY_PASS_ENV="KEYSTORE_PASSWORD"
+          fi
+
+          if [ -n "$KEY_PASS_ENV" ]; then
+            echo "Private key verified using environment variable: ${KEY_PASS_ENV}."
+          else
+            echo "::warning::Private key could not be recovered with KEY_PASSWORD or KEYSTORE_PASSWORD."
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -101,12 +165,37 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -n "$STORE_PASSWORD" || { echo "ERROR: Missing STORE_PASSWORD / KEYSTORE_PASSWORD"; exit 1; }
-          test -n "$KEY_ALIAS" || { echo "ERROR: Missing KEY_ALIAS"; exit 1; }
-          test -n "$KEY_PASSWORD" || { echo "ERROR: Missing KEY_PASSWORD"; exit 1; }
+          test -n "$STORE_PASSWORD" || { echo "::error::Missing STORE_PASSWORD / KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "::error::Missing KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "::error::Missing KEY_PASSWORD"; exit 1; }
 
           chmod +x gradlew
           ./gradlew clean assembleRelease --no-daemon
+
+      - name: Verify generated APK signature
+        run: |
+          set -euo pipefail
+          APK_FILE=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          echo "Verifying signature for $APK_FILE..."
+
+          APKSIGNER_BIN=""
+          if [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/build-tools" ]; then
+            APKSIGNER_BIN=$(find "${ANDROID_HOME}/build-tools" -name apksigner | sort -V | tail -n 1 || true)
+          fi
+          if [ -z "$APKSIGNER_BIN" ] && [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "${ANDROID_SDK_ROOT}/build-tools" ]; then
+            APKSIGNER_BIN=$(find "${ANDROID_SDK_ROOT}/build-tools" -name apksigner | sort -V | tail -n 1 || true)
+          fi
+          if [ -z "$APKSIGNER_BIN" ]; then
+            APKSIGNER_BIN=$(which apksigner 2>/dev/null || true)
+          fi
+
+          if [ -n "$APKSIGNER_BIN" ] && [ -x "$APKSIGNER_BIN" ]; then
+            echo "Using apksigner at: $APKSIGNER_BIN"
+            "$APKSIGNER_BIN" verify --verbose --print-certs "$APK_FILE"
+          else
+            echo "apksigner not located; verifying certificate with jar / unzip fallback..."
+            unzip -p "$APK_FILE" META-INF/*.RSA META-INF/*.DSA META-INF/*.EC 2>/dev/null | keytool -printcert || true
+          fi
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
