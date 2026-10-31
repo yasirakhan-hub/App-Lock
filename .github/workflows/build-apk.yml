@@ -55,29 +55,39 @@ jobs:
       - name: Verify permanent signing keystore
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'smart-applock' }}
         run: |
           set -euo pipefail
 
-          if [ -z "$KEYSTORE_PASSWORD" ]; then
-            echo "ERROR: KEYSTORE_PASSWORD secret is missing."
-            exit 1
-          fi
-
-          if [ -z "$KEY_ALIAS" ]; then
-            echo "ERROR: KEY_ALIAS secret is missing."
-            exit 1
-          fi
-
           KEYSTORE_FILE="$RUNNER_TEMP/smart-applock-release.jks"
+          TARGET_ALIAS="${KEY_ALIAS:-smart-applock}"
 
-          echo "Verifying keystore integrity and alias '${KEY_ALIAS}'..."
-          keytool -list \
-            -keystore "$KEYSTORE_FILE" \
-            -storepass:env KEYSTORE_PASSWORD \
-            -alias "$KEY_ALIAS" > /dev/null
+          echo "Verifying keystore integrity and alias '${TARGET_ALIAS}'..."
 
-          echo "Keystore validation succeeded: Key alias '${KEY_ALIAS}' verified."
+          STORE_PASS_ENV=""
+          if [ -n "${KEYSTORE_PASSWORD:-}" ] && keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
+            STORE_PASS_ENV="KEYSTORE_PASSWORD"
+          elif [ -n "${KEY_PASSWORD:-}" ] && keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" > /dev/null 2>&1; then
+            STORE_PASS_ENV="KEY_PASSWORD"
+          fi
+
+          if [ -n "$STORE_PASS_ENV" ]; then
+            echo "Keystore password verified using environment variable: ${STORE_PASS_ENV}."
+            keytool -list -keystore "$KEYSTORE_FILE" -storepass:env "$STORE_PASS_ENV" -alias "$TARGET_ALIAS"
+          else
+            echo "Keystore verification failed. Testing primary password with diagnostics output:"
+            if [ -n "${KEYSTORE_PASSWORD:-}" ]; then
+              keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEYSTORE_PASSWORD -alias "$TARGET_ALIAS" || true
+            elif [ -n "${KEY_PASSWORD:-}" ]; then
+              keytool -list -keystore "$KEYSTORE_FILE" -storepass:env KEY_PASSWORD -alias "$TARGET_ALIAS" || true
+            else
+              echo "ERROR: Neither KEYSTORE_PASSWORD nor KEY_PASSWORD secret is configured."
+            fi
+            exit 1
+          fi
+
+          echo "Keystore validation succeeded: Key alias '${TARGET_ALIAS}' verified."
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -85,13 +95,13 @@ jobs:
       - name: Build signed Release APK
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/smart-applock-release.jks
-          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'smart-applock' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
 
-          test -n "$STORE_PASSWORD" || { echo "ERROR: Missing KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$STORE_PASSWORD" || { echo "ERROR: Missing STORE_PASSWORD / KEYSTORE_PASSWORD"; exit 1; }
           test -n "$KEY_ALIAS" || { echo "ERROR: Missing KEY_ALIAS"; exit 1; }
           test -n "$KEY_PASSWORD" || { echo "ERROR: Missing KEY_PASSWORD"; exit 1; }
 
