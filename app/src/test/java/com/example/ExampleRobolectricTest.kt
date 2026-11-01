@@ -1514,6 +1514,229 @@ class ExampleRobolectricTest {
         org.junit.Assert.assertNull("LockActivity must NOT relaunch Permission Controller via startActivity", shadowActivity.nextStartedActivity)
         controller.destroy()
     }
+
+    @Test
+    fun testSessionRetainedWhenReturningFromRecentsWithRelockOnScreenOff() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        appLockManager.lockAll()
+        appLockManager.preferences.savePin("1234")
+        appLockManager.preferences.setProtectionEnabled(true)
+        appLockManager.preferences.setRelockOnScreenOff(true) // Screen-off session policy
+
+        val chatGptPkg = "com.openai.chatgpt"
+        appLockManager.preferences.setPackageProtected(chatGptPkg, true)
+
+        // 1. Initially app is locked
+        assertTrue(appLockManager.shouldLock(chatGptPkg))
+
+        // 2. User successfully authenticates
+        appLockManager.onPackageUnlocked(chatGptPkg)
+        appLockManager.onForegroundPackageChanged(chatGptPkg, "com.openai.chatgpt.MainActivity")
+        assertTrue("ChatGPT is unlocked in active session", appLockManager.isPackageUnlocked(chatGptPkg))
+        assertFalse(appLockManager.shouldLock(chatGptPkg))
+
+        // 3. User opens Recent Apps overview
+        appLockManager.onRecentsOverviewEntered()
+        assertTrue(appLockManager.isRecentsOverviewActive)
+        // Background card must not trigger lock
+        assertFalse(appLockManager.shouldLock(chatGptPkg, "com.openai.chatgpt.MainActivity"))
+
+        // 4. User taps ChatGPT card in Recent Apps
+        appLockManager.onAppLaunchedFromRecents(chatGptPkg)
+        assertFalse(appLockManager.isRecentsOverviewActive)
+
+        // 5. CRITICAL: ChatGPT MUST remain unlocked under Screen-Off relock policy!
+        assertTrue("App must retain unlocked state across Recent Apps under Screen-off relock policy",
+            appLockManager.isPackageUnlocked(chatGptPkg))
+        assertFalse("Should not prompt lock screen for already unlocked app",
+            appLockManager.shouldLock(chatGptPkg, "com.openai.chatgpt.MainActivity"))
+
+        // 6. User switches to launcher
+        appLockManager.onForegroundPackageChanged("com.android.launcher3", "com.android.launcher3.Launcher")
+        assertTrue("Launcher transition must NOT relock app under Screen-off relock policy",
+            appLockManager.isPackageUnlocked(chatGptPkg))
+
+        // 7. Screen off terminates session
+        appLockManager.onScreenOff()
+        assertFalse("Screen off terminates session", appLockManager.isPackageUnlocked(chatGptPkg))
+        assertTrue("App requires authentication after screen off", appLockManager.shouldLock(chatGptPkg))
+    }
+
+    @Test
+    fun testImmediateRelockPolicyPromptsOnceThenRetainsUnlockedInForeground() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        appLockManager.lockAll()
+        appLockManager.preferences.savePin("1234")
+        appLockManager.preferences.setProtectionEnabled(true)
+        appLockManager.preferences.setRelockOnScreenOff(false) // Immediate relock on exit policy
+
+        val bankingApp = "com.sample.banking"
+        appLockManager.preferences.setPackageProtected(bankingApp, true)
+
+        // 1. Initial unlock
+        appLockManager.onPackageUnlocked(bankingApp)
+        appLockManager.onForegroundPackageChanged(bankingApp, "com.sample.banking.MainActivity")
+        assertTrue(appLockManager.isPackageUnlocked(bankingApp))
+        assertFalse(appLockManager.shouldLock(bankingApp))
+
+        // 2. User exits to launcher -> relocked immediately
+        appLockManager.onForegroundPackageChanged("com.android.launcher3", "com.android.launcher3.Launcher")
+        assertFalse("Exiting to launcher relocks app under immediate relock policy",
+            appLockManager.isPackageUnlocked(bankingApp))
+
+        // 3. User opens Recent Apps and taps the banking app
+        appLockManager.onRecentsOverviewEntered()
+        appLockManager.onAppLaunchedFromRecents(bankingApp)
+        assertTrue("Immediate relock requires authentication when launched from Recents",
+            appLockManager.shouldLock(bankingApp, "com.sample.banking.MainActivity"))
+
+        // 4. User enters PIN to unlock
+        appLockManager.onPackageUnlocked(bankingApp)
+        appLockManager.onForegroundPackageChanged(bankingApp, "com.sample.banking.MainActivity")
+        assertTrue(appLockManager.isPackageUnlocked(bankingApp))
+
+        // 5. Subsequent navigation / window events inside the app must NOT re-prompt
+        assertFalse("Foreground navigation must not re-prompt while user remains in app",
+            appLockManager.shouldLock(bankingApp, "com.sample.banking.DetailActivity"))
+        assertFalse("Dialog popups in foreground must not re-prompt",
+            appLockManager.shouldLock(bankingApp, "android.app.Dialog"))
+    }
+
+    @Test
+    fun testDuplicateWindowEventsDoNotEvictUnlockedPackages() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        appLockManager.lockAll()
+        appLockManager.preferences.savePin("1234")
+        appLockManager.preferences.setProtectionEnabled(true)
+        appLockManager.preferences.setRelockOnScreenOff(true)
+
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+
+        val chatGptPkg = "com.openai.chatgpt"
+        appLockManager.preferences.setPackageProtected(chatGptPkg, true)
+
+        // 1. Initial unlock
+        appLockManager.onPackageUnlocked(chatGptPkg)
+        appLockManager.onForegroundPackageChanged(chatGptPkg, "com.openai.chatgpt.MainActivity")
+        assertTrue(appLockManager.isPackageUnlocked(chatGptPkg))
+
+        // 2. Simulate rapid duplicate window state changed events (e.g. Compose redraws, view updates)
+        for (i in 1..5) {
+            val event = android.view.accessibility.AccessibilityEvent.obtain(
+                android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            ).apply {
+                packageName = chatGptPkg
+                className = "com.openai.chatgpt.MainActivity"
+            }
+            service.onAccessibilityEvent(event)
+            assertTrue("Duplicate event $i must NOT evict unlocked state",
+                appLockManager.isPackageUnlocked(chatGptPkg))
+            assertFalse("Duplicate event $i must NOT trigger lock",
+                appLockManager.shouldLock(chatGptPkg))
+        }
+    }
+
+    @Test
+    fun testStaleRecentAppsOverviewClearedOnTimeout() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        appLockManager.lockAll()
+        appLockManager.preferences.savePin("1234")
+        appLockManager.preferences.setProtectionEnabled(true)
+        appLockManager.preferences.setRelockOnScreenOff(true)
+
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+
+        val chatGptPkg = "com.openai.chatgpt"
+        appLockManager.preferences.setPackageProtected(chatGptPkg, true)
+        appLockManager.onPackageUnlocked(chatGptPkg)
+
+        // 1. User enters Recent Apps overview
+        val recentsEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.android.systemui"
+            className = "com.android.systemui.recents.RecentsActivity"
+        }
+        service.onAccessibilityEvent(recentsEvent)
+        assertTrue(appLockManager.isRecentsOverviewActive)
+
+        // 2. Overview expires beyond grace window (> 1200ms)
+        Thread.sleep(1300L)
+
+        // 3. App event arrives after overview expired
+        appLockManager.onForegroundPackageChanged(chatGptPkg, "com.openai.chatgpt.MainActivity")
+
+        // Recents overview active state must have been cleared
+        assertFalse("Stale recents overview must be cleared after timeout", appLockManager.isRecentsOverviewActive)
+        // ChatGPT must remain unlocked in session
+        assertTrue("ChatGPT must remain unlocked", appLockManager.isPackageUnlocked(chatGptPkg))
+        assertFalse(appLockManager.shouldLock(chatGptPkg))
+    }
+
+    @Test
+    fun testNullRootInActiveWindowTransitionClearsStaleOverviewOnForegroundChange() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        appLockManager.lockAll()
+        appLockManager.preferences.savePin("1234")
+        appLockManager.preferences.setProtectionEnabled(true)
+        appLockManager.preferences.setRelockOnScreenOff(true)
+
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+
+        val chatGptPkg = "com.openai.chatgpt"
+        appLockManager.preferences.setPackageProtected(chatGptPkg, true)
+        appLockManager.onPackageUnlocked(chatGptPkg)
+
+        // 1. Recents overview is active
+        appLockManager.onRecentsOverviewEntered()
+        assertTrue(appLockManager.isRecentsOverviewActive)
+
+        // 2. User taps app, framework delivers window event while rootInActiveWindow is null during transition
+        // In Robolectric service, rootInActiveWindow is null by default
+        org.junit.Assert.assertNull("Service rootInActiveWindow is null during transition", service.rootInActiveWindow)
+
+        // When the user taps the app from Recents, onAppLaunchedFromRecents is called by the system
+        appLockManager.onAppLaunchedFromRecents(chatGptPkg)
+        assertFalse("onAppLaunchedFromRecents must clear isRecentsOverviewActive", appLockManager.isRecentsOverviewActive)
+
+        // Then onForegroundPackageChanged runs for the app
+        appLockManager.onForegroundPackageChanged(chatGptPkg, "com.openai.chatgpt.MainActivity")
+
+        // Unlocked session must be preserved and no lock triggered
+        assertTrue("ChatGPT must remain unlocked under screen-off relock policy",
+            appLockManager.isPackageUnlocked(chatGptPkg))
+        assertFalse("Should not lock ChatGPT", appLockManager.shouldLock(chatGptPkg))
+    }
+
+    @Test
+    fun testUninstallProtectionCannotBeBypassedByRedundantEventFastPath() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        appLockManager.lockAll()
+        appLockManager.preferences.savePin("1234")
+        appLockManager.preferences.setProtectionEnabled(true)
+
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+
+        val permControllerPkg = "com.google.android.permissioncontroller"
+        val uninstallerClass = "com.android.permissioncontroller.permission.ui.UninstallerActivity"
+
+        // Even if Permission Controller was somehow marked unlocked in foreground
+        appLockManager.onPackageUnlocked(permControllerPkg)
+        appLockManager.onForegroundPackageChanged(permControllerPkg, uninstallerClass)
+
+        // Self-uninstall event arrives
+        val uninstallEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = permControllerPkg
+            className = uninstallerClass
+            text.add("Do you want to uninstall Smart AppLock?")
+        }
+
+        // Must still be intercepted as uninstallation protection
+        assertTrue("Uninstallation must be intercepted even if package was in foreground",
+            service.isPackageInstallerUninstallingSelf(permControllerPkg, uninstallerClass, uninstallEvent))
+    }
 }
 
 

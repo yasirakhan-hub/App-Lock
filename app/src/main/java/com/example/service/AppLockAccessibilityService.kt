@@ -117,6 +117,7 @@ class AppLockAccessibilityService : AccessibilityService() {
         // 3. Package Installer Handling (Installation / Update vs Uninstall Protection):
         // Intercept Package Installer when attempting to uninstall Smart AppLock,
         // while allowing legitimate installation and update flows once authenticated without looping.
+        // Processed BEFORE redundant event fast path to guarantee uninstallation protection is NEVER bypassed!
         val isUninstallingSelf = isPackageInstallerUninstallingSelf(pkgName, className, event)
         val isInstaller = appLockManager.isPackageInstaller(pkgName)
 
@@ -143,6 +144,13 @@ class AppLockAccessibilityService : AccessibilityService() {
             if (appLockManager.isInstallerSessionUnlocked()) {
                 return
             }
+        }
+
+        // Fast path for redundant window state events:
+        // If the package is already currently in the foreground and already authenticated/unlocked in this session,
+        // redundant window state events (e.g. from internal views, Compose redraws, dialogs) should not re-trigger lock.
+        if (pkgName == appLockManager.currentForegroundPackage && appLockManager.isPackageUnlocked(pkgName)) {
+            return
         }
 
         appLockManager.onForegroundPackageChanged(pkgName, className, this)

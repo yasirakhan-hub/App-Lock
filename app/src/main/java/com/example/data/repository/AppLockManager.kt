@@ -245,8 +245,19 @@ class AppLockManager private constructor(private val context: Context) {
     fun onAppLaunchedFromRecents(packageName: String) {
         isRecentsOverviewActive = false
         lastRecentsOverviewTimestamp = 0L
-        // Crucial: Returning to a protected app from Recent Apps MUST require authentication!
-        unlockedPackages.remove(packageName)
+        // Under immediate relock policy (!isRelockOnScreenOff), returning to a protected app from Recent Apps
+        // requires authentication. Under screen-off session policy (isRelockOnScreenOff), apps remain unlocked.
+        if (!preferences.isRelockOnScreenOff()) {
+            unlockedPackages.remove(packageName)
+        }
+    }
+
+    /**
+     * Resets the active Recent Apps overview state when navigating away or focusing an app.
+     */
+    fun clearRecentsOverviewState() {
+        isRecentsOverviewActive = false
+        lastRecentsOverviewTimestamp = 0L
     }
 
     /**
@@ -297,8 +308,7 @@ class AppLockManager private constructor(private val context: Context) {
 
         // 3. User is on Home screen or Launcher:
         if (isLauncher) {
-            isRecentsOverviewActive = false
-            lastRecentsOverviewTimestamp = 0L
+            clearRecentsOverviewState()
             currentForegroundPackage = newPackage
             lastLauncherExitTimestamp = System.currentTimeMillis()
 
@@ -309,6 +319,12 @@ class AppLockManager private constructor(private val context: Context) {
                 unlockedPackages.remove(previous)
             }
             return
+        }
+
+        // Check if recents overview has become stale (e.g. user swiped back into an app or overview expired)
+        val now = System.currentTimeMillis()
+        if (isRecentsOverviewActive && (now - lastRecentsOverviewTimestamp > RECENTS_GRACE_WINDOW_MS)) {
+            clearRecentsOverviewState()
         }
 
         // 4. If Recent Apps overview is currently active, background task card views
