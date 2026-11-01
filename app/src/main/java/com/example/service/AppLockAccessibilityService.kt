@@ -104,8 +104,12 @@ class AppLockAccessibilityService : AccessibilityService() {
                 return
             }
         } else if (activePkg != null && activePkg == pkgName) {
+            // If pkgName is itself Launcher, System UI, or Recents overview, it must NEVER be treated as an app launched from Recents
+            if (appLockManager.isLauncherOrSystemUI(pkgName) || appLockManager.isRecentsOrOverview(pkgName, className)) {
+                return
+            }
             // User explicitly tapped and brought pkgName to the active foreground from Recents:
-            if (appLockManager.isRecentsOverviewActive && !appLockManager.isLauncherOrSystemUI(pkgName)) {
+            if (appLockManager.isRecentsOverviewActive) {
                 appLockManager.onAppLaunchedFromRecents(pkgName)
             }
         }
@@ -113,15 +117,29 @@ class AppLockAccessibilityService : AccessibilityService() {
         // 3. Package Installer Handling (Installation / Update vs Uninstall Protection):
         // Intercept Package Installer when attempting to uninstall Smart AppLock,
         // while allowing legitimate installation and update flows once authenticated without looping.
-        if (appLockManager.isPackageInstaller(pkgName) || isPackageInstallerUninstallingSelf(pkgName, className, event)) {
-            if (isPackageInstallerUninstallingSelf(pkgName, className, event)) {
+        val isUninstallingSelf = isPackageInstallerUninstallingSelf(pkgName, className, event)
+        val isInstaller = appLockManager.isPackageInstaller(pkgName)
+
+        if (isInstaller || isUninstallingSelf) {
+            if (isUninstallingSelf) {
                 if (!appLockManager.isSelfAppInfoUnlocked()) {
-                    appLockManager.launchLockScreen(pkgName, className, this)
+                    val intent = Intent(this, com.example.ui.lock.LockActivity::class.java).apply {
+                        putExtra(com.example.ui.lock.LockActivity.EXTRA_TARGET_PACKAGE, pkgName)
+                        putExtra(com.example.ui.lock.LockActivity.EXTRA_IS_UNINSTALL_SELF, true)
+                        if (!className.isNullOrBlank()) {
+                            putExtra(com.example.ui.lock.LockActivity.EXTRA_TARGET_CLASS, className)
+                        }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    try {
+                        startActivity(intent)
+                    } catch (_: Exception) {
+                    }
                 }
                 return
             }
 
-            // If this is an installation/update flow and session is already unlocked, bypass repeated prompts
+            // If this is a normal installation/update flow and session is already unlocked, bypass repeated prompts
             if (appLockManager.isInstallerSessionUnlocked()) {
                 return
             }
@@ -280,6 +298,12 @@ class AppLockAccessibilityService : AccessibilityService() {
 
         val directMatches = matchesText || matchesDesc
 
+        val directHasUninstallCue = event.text?.any { text ->
+            val str = text.toString()
+            str.contains("uninstall", ignoreCase = true) ||
+            str.contains("delete", ignoreCase = true)
+        } ?: false
+
         // 2. Deep node inspection for dialog text
         val rootNode = try {
             rootInActiveWindow ?: event.source
@@ -288,7 +312,7 @@ class AppLockAccessibilityService : AccessibilityService() {
         }
 
         var nodeHasIdentifier = false
-        var hasUninstallCue = false
+        var hasUninstallCue = directHasUninstallCue
 
         if (rootNode != null) {
             try {
