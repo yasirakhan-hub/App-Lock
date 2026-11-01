@@ -150,6 +150,18 @@ class AppLockManager private constructor(private val context: Context) {
             "com.oppo.keyboard"
         )
 
+        val VERIFIED_PACKAGE_INSTALLER_PACKAGES = setOf(
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller",
+            "com.samsung.android.packageinstaller",
+            "com.motorola.packageinstaller",
+            "com.miui.packageinstaller",
+            "com.coloros.packageinstaller",
+            "com.oppo.packageinstaller",
+            "com.oneplus.packageinstaller",
+            "com.vivo.packageinstaller"
+        )
+
         val SYSTEM_PERMISSION_RESOLVER_PACKAGES = setOf(
             "com.google.android.permissioncontroller",
             "com.android.permissioncontroller",
@@ -181,7 +193,9 @@ class AppLockManager private constructor(private val context: Context) {
             "com.oppo.launcher", // OPPO ColorOS Launcher
             "com.bbk.launcher2", // Vivo FuntouchOS Launcher
             "com.vivo.launcher", // Vivo Launcher
-            "com.motorola.launcher3", // Motorola My UX Launcher
+            "com.motorola.launcher3", // Motorola My UX / Hello UI Launcher
+            "com.motorola.launcher", // Motorola Launcher
+            "com.lenovo.launcher", // Lenovo Launcher
             "net.oneplus.launcher", // OnePlus OxygenOS Launcher
             "com.huawei.android.launcher", // Huawei EMUI / HarmonyOS
             "com.transsion.hilauncher", // Tecno / Infinix HiOS
@@ -413,7 +427,6 @@ class AppLockManager private constructor(private val context: Context) {
         if (isSystemDocumentOrMediaPicker(packageName)) return false
         if (isPackageInstaller(packageName) && isInstallerSessionUnlocked()) return false
         if (isTransientSystemOrOverlayPackage(packageName)) return false
-        if (isLauncherOrSystemUI(packageName)) return false
         if (isRecentsOverviewActive || isRecentsOrOverview(packageName, className)) return false
         if (!preferences.isPackageProtected(packageName)) return false
         if (unlockedPackages.contains(packageName)) return false
@@ -585,7 +598,10 @@ class AppLockManager private constructor(private val context: Context) {
                 lower.contains("overview") ||
                 lower.contains("taskview") ||
                 lower.contains("taskswitcher") ||
-                lower.contains("recenttask")
+                lower.contains("recenttask") ||
+                lower.contains("recentsactivity") ||
+                lower.contains("recentsview") ||
+                lower.contains("fallbackrecentsactivity")
             ) {
                 return true
             }
@@ -601,6 +617,7 @@ class AppLockManager private constructor(private val context: Context) {
      * PackageManager IPC/Binder calls on every foreground window state change.
      */
     fun isLauncherOrSystemUI(packageName: String): Boolean {
+        if (packageName.isBlank()) return false
         if (packageName == "com.android.systemui") return true
         if (packageName == "android") return true
         if (packageName in KNOWN_OEM_LAUNCHERS) return true
@@ -629,11 +646,20 @@ class AppLockManager private constructor(private val context: Context) {
      * caching the result to avoid repeated synchronous Binder IPC calls on every window state change.
      */
     fun isSecondaryLauncher(packageName: String): Boolean {
+        if (packageName.isBlank()) return false
         return secondaryLauncherCache.computeIfAbsent(packageName) { pkg ->
             try {
+                // First query with setPackage
                 val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage(pkg)
                 val activities = context.packageManager.queryIntentActivities(homeIntent, 0)
-                activities.isNotEmpty()
+                if (activities.isNotEmpty()) {
+                    true
+                } else {
+                    // Also check all installed home launchers in case setPackage did not resolve
+                    val allHomeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                    val allLaunchers = context.packageManager.queryIntentActivities(allHomeIntent, 0)
+                    allLaunchers.any { it.activityInfo?.packageName == pkg }
+                }
             } catch (_: Exception) {
                 false
             }
@@ -642,14 +668,12 @@ class AppLockManager private constructor(private val context: Context) {
 
     /**
      * Checks whether the given package is an Android Package Installer / Uninstaller component.
+     * Uses verified exact OEM package identifiers rather than ambiguous substrings.
      */
     fun isPackageInstaller(packageName: String): Boolean {
+        if (packageName.isBlank()) return false
         val lower = packageName.lowercase()
-        return lower == "com.google.android.packageinstaller" ||
-                lower == "com.android.packageinstaller" ||
-                lower == "com.samsung.android.packageinstaller" ||
-                lower == "com.google.android.permissioncontroller" ||
-                lower == "com.android.permissioncontroller"
+        return lower in VERIFIED_PACKAGE_INSTALLER_PACKAGES
     }
 
     /**

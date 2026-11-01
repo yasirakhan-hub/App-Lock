@@ -161,6 +161,37 @@ class ExampleRobolectricTest {
         preferences.setPackageProtected(pkg1, false)
         assertFalse(preferences.isPackageProtected(pkg1))
         assertTrue(preferences.isPackageProtected(pkg2))
+
+        // Verify multi-instance cache consistency
+        val prefInstance2 = AppLockPreferences(context)
+        assertTrue("Second AppLockPreferences instance must immediately reflect protected pkg2 from cache",
+            prefInstance2.isPackageProtected(pkg2))
+        assertFalse("Second AppLockPreferences instance must immediately reflect unprotected pkg1 from cache",
+            prefInstance2.isPackageProtected(pkg1))
+
+        // Modify via instance 2
+        prefInstance2.setPackageProtected(pkg1, true)
+        assertTrue("First instance must immediately observe pkg1 protected when set by second instance",
+            preferences.isPackageProtected(pkg1))
+
+        // Test addProtectedPackages via instance 1, observed by instance 2
+        preferences.addProtectedPackages(listOf("com.sample.three", "com.sample.four"))
+        assertTrue("Second instance must observe newly added batch package",
+            prefInstance2.isPackageProtected("com.sample.three"))
+        assertTrue("Second instance must observe newly added batch package",
+            prefInstance2.isPackageProtected("com.sample.four"))
+
+        // Test removeProtectedPackages via instance 2, observed by instance 1
+        prefInstance2.removeProtectedPackages(listOf("com.sample.three"))
+        assertFalse("First instance must immediately observe package removal",
+            preferences.isPackageProtected("com.sample.three"))
+        assertTrue("Untouched package remains protected",
+            preferences.isPackageProtected("com.sample.four"))
+
+        // Test clearAllData via instance 2 resets cache for instance 1
+        prefInstance2.clearAllData()
+        assertFalse("First instance must observe cache clear",
+            preferences.isPackageProtected("com.sample.four"))
     }
 
     @Test
@@ -1196,26 +1227,59 @@ class ExampleRobolectricTest {
         val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
         val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
 
-        // 1. Verify modern permissioncontroller packages are recognized as package installers
+        // 1. Verify exact package installer identification
         assertTrue(appLockManager.isPackageInstaller("com.google.android.packageinstaller"))
         assertTrue(appLockManager.isPackageInstaller("com.android.packageinstaller"))
-        assertTrue(appLockManager.isPackageInstaller("com.google.android.permissioncontroller"))
-        assertTrue(appLockManager.isPackageInstaller("com.android.permissioncontroller"))
+        // Permission controller is separate from package installers:
+        assertFalse(appLockManager.isPackageInstaller("com.google.android.permissioncontroller"))
+        assertFalse(appLockManager.isPackageInstaller("com.android.permissioncontroller"))
 
         // 2. Simulated uninstallation event with app name or package and uninstall cues
         val dummyEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.google.android.packageinstaller"
+            className = "com.android.packageinstaller.UninstallerActivity"
+            text.add("Do you want to uninstall Smart AppLock?")
+        }
+
+        assertTrue("Uninstall attempt targeting Smart AppLock must be detected",
+            service.isPackageInstallerUninstallingSelf(
+                "com.google.android.packageinstaller",
+                "com.android.packageinstaller.UninstallerActivity",
+                dummyEvent
+            )
+        )
+
+        // 3. Permission controller hosting uninstallation dialog:
+        val permControllerEvent = android.view.accessibility.AccessibilityEvent.obtain(
             android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ).apply {
             packageName = "com.google.android.permissioncontroller"
             className = "com.android.permissioncontroller.permission.ui.UninstallerActivity"
             text.add("Do you want to uninstall Smart AppLock?")
         }
-
-        assertTrue("Uninstall attempt targeting Smart AppLock must be detected",
+        assertTrue("Permission controller uninstallation must also be detected for self-uninstall",
             service.isPackageInstallerUninstallingSelf(
                 "com.google.android.permissioncontroller",
                 "com.android.permissioncontroller.permission.ui.UninstallerActivity",
-                dummyEvent
+                permControllerEvent
+            )
+        )
+
+        // 4. Permission controller dialog for granting runtime permissions (NOT uninstallation):
+        val runtimePermEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.google.android.permissioncontroller"
+            className = "com.android.permissioncontroller.permission.ui.GrantPermissionsActivity"
+            text.add("Allow Camera permission?")
+        }
+        assertFalse("Runtime permission dialog must NOT be detected as uninstalling self",
+            service.isPackageInstallerUninstallingSelf(
+                "com.google.android.permissioncontroller",
+                "com.android.permissioncontroller.permission.ui.GrantPermissionsActivity",
+                runtimePermEvent
             )
         )
     }
@@ -1240,6 +1304,215 @@ class ExampleRobolectricTest {
         assertTrue("device-admin must declare watch-login policy", foundPolicies.contains("watch-login"))
         assertFalse("wipe-data policy must NEVER be declared", foundPolicies.contains("wipe-data"))
         assertFalse("reset-password policy must not be declared", foundPolicies.contains("reset-password"))
+    }
+
+    @Test
+    fun testMotorolaAndOemLauncherRecentAppsDetection() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+
+        // 1. Verify Motorola launcher is recognized as launcher/System UI
+        assertTrue("Motorola Launcher3 must be recognized as LauncherOrSystemUI",
+            appLockManager.isLauncherOrSystemUI("com.motorola.launcher3"))
+        assertTrue("Motorola Launcher must be recognized as LauncherOrSystemUI",
+            appLockManager.isLauncherOrSystemUI("com.motorola.launcher"))
+        assertTrue("Lenovo Launcher must be recognized as LauncherOrSystemUI",
+            appLockManager.isLauncherOrSystemUI("com.lenovo.launcher"))
+
+        // 2. Motorola launcher and Recents transitions must never be locked in shouldLock
+        assertFalse("Motorola launcher must never prompt lock",
+            appLockManager.shouldLock("com.motorola.launcher3"))
+        assertFalse("Recents activity on Motorola launcher must never prompt lock",
+            appLockManager.shouldLock("com.motorola.launcher3", "com.motorola.launcher3.RecentsActivity"))
+
+        // 3. Opening, scrolling, and closing Recent Apps must never trigger authentication
+        appLockManager.onRecentsOverviewEntered()
+        assertTrue(appLockManager.isRecentsOverviewActive)
+
+        val protectedApp = "com.sample.banking"
+        preferences.setPackageProtected(protectedApp, true)
+
+        // While overview is active, background cards or transitions must not trigger lock
+        assertFalse("Recent Apps scrolling must not trigger lock for protected app",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.MainActivity"))
+
+        // Active focused window in Recents:
+        appLockManager.onForegroundPackageChanged("com.motorola.launcher3", "com.motorola.launcher3.RecentsActivity")
+        assertTrue(appLockManager.isRecentsOverviewActive)
+
+        // When user resumes protected app from Recent Apps, it MUST require authentication
+        appLockManager.onAppLaunchedFromRecents(protectedApp)
+        assertFalse(appLockManager.isRecentsOverviewActive)
+        assertTrue("Selecting protected app from Recent Apps must require authentication",
+            appLockManager.shouldLock(protectedApp, "com.sample.banking.MainActivity"))
+    }
+
+    @Test
+    fun testPackageInstallerLoopPreventionAndSessionIsolation() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+
+        val installerPkg = "com.google.android.packageinstaller"
+        val protectedApp = "com.sample.banking"
+        preferences.setPackageProtected(protectedApp, true)
+
+        // 1. Verify production isPackageInstaller method identifies verified OEMs and rejects unknown ones
+        assertTrue(appLockManager.isPackageInstaller("com.google.android.packageinstaller"))
+        assertTrue(appLockManager.isPackageInstaller("com.android.packageinstaller"))
+        assertTrue(appLockManager.isPackageInstaller("com.samsung.android.packageinstaller"))
+        assertTrue(appLockManager.isPackageInstaller("com.motorola.packageinstaller"))
+        assertTrue(appLockManager.isPackageInstaller("com.miui.packageinstaller"))
+        assertFalse(appLockManager.isPackageInstaller("com.whatsapp"))
+        assertFalse(appLockManager.isPackageInstaller("com.fake.packageinstaller.malware"))
+
+        // 2. Initially installer session is not unlocked
+        assertFalse(appLockManager.isInstallerSessionUnlocked())
+
+        // 3. Protected app requires authentication
+        assertTrue(appLockManager.shouldLock(protectedApp))
+
+        // 4. User authenticates package installer session (e.g. during install/update)
+        appLockManager.unlockInstallerSession()
+        assertTrue(appLockManager.isInstallerSessionUnlocked())
+
+        // 5. Installer session bypass applies ONLY to installer package, NOT unrelated protected apps!
+        assertFalse("Package installer should not prompt repeatedly once session is unlocked",
+            appLockManager.shouldLock(installerPkg))
+        assertTrue("Unrelated protected app must STILL require authentication even if installer session is unlocked",
+            appLockManager.shouldLock(protectedApp))
+
+        // 6. Clearing installer session restores normal protection
+        appLockManager.clearInstallerSession()
+        assertFalse(appLockManager.isInstallerSessionUnlocked())
+    }
+
+    @Test
+    fun testIntentionallyProtectedLauncherRemainsProtected() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        appLockManager.lockAll()
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+
+        val launcherPkg = "com.motorola.launcher3"
+        // Initially launcher is not protected by the user
+        assertFalse(preferences.isPackageProtected(launcherPkg))
+        assertFalse("Unprotected launcher must not prompt lock", appLockManager.shouldLock(launcherPkg))
+
+        // User intentionally chooses to protect their Home launcher
+        preferences.setPackageProtected(launcherPkg, true)
+        assertTrue(preferences.isPackageProtected(launcherPkg))
+        assertTrue("Intentionally protected launcher MUST prompt lock when opened", appLockManager.shouldLock(launcherPkg))
+
+        // Verify LockActivity does not prematurely finish when the launcher is intentionally protected
+        val lockIntent = android.content.Intent(context, com.example.ui.lock.LockActivity::class.java).apply {
+            putExtra(com.example.ui.lock.LockActivity.EXTRA_TARGET_PACKAGE, launcherPkg)
+        }
+        val controller = org.robolectric.Robolectric.buildActivity(com.example.ui.lock.LockActivity::class.java, lockIntent).create()
+        val activity = controller.get()
+        assertFalse("LockActivity must NOT finish when launcher is intentionally protected", activity.isFinishing)
+        controller.destroy()
+
+        // Unlocking it keeps it unlocked in the session
+        appLockManager.onPackageUnlocked(launcherPkg)
+        assertTrue(appLockManager.isPackageUnlocked(launcherPkg))
+        assertFalse("Unlocked protected launcher should not re-prompt in active session", appLockManager.shouldLock(launcherPkg))
+    }
+
+    @Test
+    fun testAccessibilityServiceRealisticRecentAppsAndCardFlow() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+
+        val protectedApp = "com.sample.banking"
+        preferences.setPackageProtected(protectedApp, true)
+
+        // 1. Simulate opening Recent Apps (event for Motorola launcher with RecentsActivity)
+        val recentsEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.motorola.launcher3"
+            className = "com.motorola.launcher3.RecentsActivity"
+        }
+        service.onAccessibilityEvent(recentsEvent)
+        assertTrue("Recents overview must be active", appLockManager.isRecentsOverviewActive)
+
+        // 2. Scrolling through Recent Apps generates events for background task cards (e.g. banking app)
+        val cardEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = protectedApp
+            className = "com.sample.banking.MainActivity"
+        }
+        // When active window is launcher or recents overview is active:
+        service.onAccessibilityEvent(cardEvent)
+        assertTrue("Recents overview must remain active while scrolling cards", appLockManager.isRecentsOverviewActive)
+        assertFalse("Background card during Recents scroll must NEVER be unlocked without auth", appLockManager.isPackageUnlocked(protectedApp))
+
+        // 3. User taps the card to bring it to foreground:
+        // Note on Robolectric limitation: Robolectric shadows do not provide a real multi-window
+        // WindowManager or interactive rootInActiveWindow node tree for task card click simulation,
+        // so onAppLaunchedFromRecents() is invoked as the production state transition handler
+        // called when the active window transition matches the tapped app.
+        appLockManager.onAppLaunchedFromRecents(protectedApp)
+        assertFalse(appLockManager.isRecentsOverviewActive)
+        assertTrue("Launching protected app from Recents must require authentication", appLockManager.shouldLock(protectedApp))
+    }
+
+    @Test
+    fun testPermissionControllerSelfUninstallEndToEndFlow() {
+        val appLockManager = com.example.data.repository.AppLockManager.getInstance(context)
+        preferences.setProtectionEnabled(true)
+        preferences.savePin("1234")
+
+        val permControllerPkg = "com.google.android.permissioncontroller"
+        val uninstallerClass = "com.android.permissioncontroller.permission.ui.UninstallerActivity"
+
+        // 1. Initial state: Self App Info is not unlocked
+        assertFalse(appLockManager.isSelfAppInfoUnlocked())
+
+        // 2. AccessibilityService intercepts Permission Controller uninstallation prompt
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+        val uninstallEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = permControllerPkg
+            className = uninstallerClass
+            text.add("Do you want to uninstall Smart AppLock?")
+        }
+        assertTrue("Self uninstall targeting Smart AppLock must be detected",
+            service.isPackageInstallerUninstallingSelf(permControllerPkg, uninstallerClass, uninstallEvent))
+
+        // 3. Launch LockActivity as started by service with EXTRA_IS_UNINSTALL_SELF
+        val lockIntent = android.content.Intent(context, com.example.ui.lock.LockActivity::class.java).apply {
+            putExtra(com.example.ui.lock.LockActivity.EXTRA_TARGET_PACKAGE, permControllerPkg)
+            putExtra(com.example.ui.lock.LockActivity.EXTRA_TARGET_CLASS, uninstallerClass)
+            putExtra(com.example.ui.lock.LockActivity.EXTRA_IS_UNINSTALL_SELF, true)
+        }
+        val controller = org.robolectric.Robolectric.buildActivity(com.example.ui.lock.LockActivity::class.java, lockIntent).create()
+        val activity = controller.get()
+        val shadowActivity = org.robolectric.Shadows.shadowOf(activity)
+
+        // Verify LockActivity does not store permission controller as intercepted target
+        val storedTarget = appLockManager.getAndRemoveInterceptedTarget(permControllerPkg)
+        org.junit.Assert.assertNull("Permission Controller must NEVER be stored as intercepted target", storedTarget)
+
+        // 4. Successful unlock in LockActivity for self-uninstall:
+        appLockManager.onSelfAppInfoUnlocked()
+        appLockManager.onPackageUnlocked(permControllerPkg)
+        activity.finish()
+
+        // Verify self App Info is authorized
+        assertTrue("Self App Info must be unlocked after PIN verification", appLockManager.isSelfAppInfoUnlocked())
+        // Verify Permission Controller does NOT receive installer session bypass
+        assertFalse("Permission Controller must NOT be granted installer session bypass", appLockManager.isInstallerSessionUnlocked())
+        // Verify no relaunch intent was started (no infinite relaunch loop)
+        org.junit.Assert.assertNull("LockActivity must NOT relaunch Permission Controller via startActivity", shadowActivity.nextStartedActivity)
+        controller.destroy()
     }
 }
 

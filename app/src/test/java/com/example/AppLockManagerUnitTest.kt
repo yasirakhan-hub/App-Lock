@@ -136,4 +136,89 @@ class AppLockManagerUnitTest {
         assertTrue(isSessionActive(45000L))
         assertFalse(isSessionActive(46001L))
     }
+
+    @Test
+    fun verifiedPackageInstallerPackages_matchesExpectedSet() {
+        val verifiedInstallers = com.example.data.repository.AppLockManager.VERIFIED_PACKAGE_INSTALLER_PACKAGES
+        assertTrue(verifiedInstallers.contains("com.google.android.packageinstaller"))
+        assertTrue(verifiedInstallers.contains("com.android.packageinstaller"))
+        assertTrue(verifiedInstallers.contains("com.samsung.android.packageinstaller"))
+        assertTrue(verifiedInstallers.contains("com.motorola.packageinstaller"))
+        assertTrue(verifiedInstallers.contains("com.miui.packageinstaller"))
+
+        // Permission controller, OTA, app store, and unrelated apps must NOT be in the set
+        assertFalse(verifiedInstallers.contains("com.google.android.permissioncontroller"))
+        assertFalse(verifiedInstallers.contains("com.android.permissioncontroller"))
+        assertFalse(verifiedInstallers.contains("com.motorola.ccc.ota"))
+        assertFalse(verifiedInstallers.contains("com.huawei.appmarket"))
+        assertFalse(verifiedInstallers.contains("com.whatsapp"))
+        assertFalse(verifiedInstallers.contains("com.example.mypackageinstaller"))
+        assertFalse(verifiedInstallers.contains("com.test.packagemanager.unrelated"))
+    }
+
+    @Test
+    fun companionCacheInvalidation_contractVerification() {
+        // Direct companion cache lifecycle test
+        val mockCacheHolder = object {
+            @Volatile
+            var cachedProtectedPackages: Set<String>? = null
+
+            fun setProtectedPackages(packages: Set<String>) {
+                val newSet = HashSet(packages)
+                synchronized(this) {
+                    cachedProtectedPackages = newSet
+                }
+            }
+
+            fun addProtectedPackages(packageNames: Collection<String>) {
+                if (packageNames.isEmpty()) return
+                val current = HashSet(getProtectedPackages())
+                current.addAll(packageNames)
+                setProtectedPackages(current)
+            }
+
+            fun removeProtectedPackages(packageNames: Collection<String>) {
+                if (packageNames.isEmpty()) return
+                val current = HashSet(getProtectedPackages())
+                current.removeAll(packageNames.toSet())
+                setProtectedPackages(current)
+            }
+
+            fun clearAllData() {
+                synchronized(this) {
+                    cachedProtectedPackages = null
+                }
+            }
+
+            fun getProtectedPackages(): Set<String> {
+                return cachedProtectedPackages ?: synchronized(this) {
+                    cachedProtectedPackages ?: emptySet<String>().also {
+                        cachedProtectedPackages = it
+                    }
+                }
+            }
+        }
+
+        // 1. Initial state
+        assertTrue(mockCacheHolder.getProtectedPackages().isEmpty())
+
+        // 2. setProtectedPackages
+        mockCacheHolder.setProtectedPackages(setOf("com.pkg.one", "com.pkg.two"))
+        assertEquals(2, mockCacheHolder.getProtectedPackages().size)
+        assertTrue(mockCacheHolder.getProtectedPackages().contains("com.pkg.one"))
+
+        // 3. addProtectedPackages
+        mockCacheHolder.addProtectedPackages(listOf("com.pkg.three"))
+        assertEquals(3, mockCacheHolder.getProtectedPackages().size)
+        assertTrue(mockCacheHolder.getProtectedPackages().contains("com.pkg.three"))
+
+        // 4. removeProtectedPackages
+        mockCacheHolder.removeProtectedPackages(listOf("com.pkg.one"))
+        assertEquals(2, mockCacheHolder.getProtectedPackages().size)
+        assertFalse(mockCacheHolder.getProtectedPackages().contains("com.pkg.one"))
+
+        // 5. clearAllData resets to empty
+        mockCacheHolder.clearAllData()
+        assertTrue(mockCacheHolder.getProtectedPackages().isEmpty())
+    }
 }

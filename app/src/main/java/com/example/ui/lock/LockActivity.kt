@@ -79,6 +79,7 @@ class LockActivity : FragmentActivity() {
         const val EXTRA_TARGET_CLASS = "extra_target_class"
         const val EXTRA_IS_TEST_MODE = "extra_is_test_mode"
         const val EXTRA_ACTION_DEACTIVATE_ADMIN = "extra_action_deactivate_admin"
+        const val EXTRA_IS_UNINSTALL_SELF = "extra_is_uninstall_self"
     }
 
     private lateinit var appLockManager: AppLockManager
@@ -95,19 +96,35 @@ class LockActivity : FragmentActivity() {
         val targetClass = intent.getStringExtra(EXTRA_TARGET_CLASS)
         val isTestMode = intent.getBooleanExtra(EXTRA_IS_TEST_MODE, false)
         val isDeactivateAdmin = intent.getBooleanExtra(EXTRA_ACTION_DEACTIVATE_ADMIN, false)
+        val isUninstallSelf = intent.getBooleanExtra(EXTRA_IS_UNINSTALL_SELF, false)
 
-        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank()) {
+        // Safety guard: Never intercept or lock the active launcher or overview UNLESS intentionally protected by the user
+        val isExplicitlyProtected = appLockManager.preferences.isPackageProtected(targetPackage)
+        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank() && appLockManager.isLauncherOrSystemUI(targetPackage) && !isExplicitlyProtected) {
+            finish()
+            return
+        }
+
+        val isInstaller = appLockManager.isPackageInstaller(targetPackage)
+        val isSelfAppInfo = targetPackage == packageName
+        val isSelfAppOrUninstall = isSelfAppInfo || isUninstallSelf
+        val isPermissionController = targetPackage == "com.google.android.permissioncontroller" || targetPackage == "com.android.permissioncontroller"
+
+        // Never store intercepted target for installers, permission controllers, or self app info to prevent relaunch loops
+        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank() && !isInstaller && !isPermissionController && !isSelfAppInfo) {
             appLockManager.storeInterceptedTarget(targetPackage, targetClass)
         }
 
         val appName = if (isDeactivateAdmin) {
             "Deactivate Device Administrator"
+        } else if (isSelfAppOrUninstall) {
+            getString(com.example.R.string.app_name)
         } else if (targetPackage.isNotBlank()) {
             appDiscoveryRepository.getAppName(targetPackage)
         } else {
             "Protected Application"
         }
-        val appIcon = if (targetPackage.isNotBlank()) {
+        val appIcon = if (targetPackage.isNotBlank() && !isSelfAppOrUninstall) {
             appDiscoveryRepository.getAppIcon(targetPackage)
         } else null
 
@@ -122,12 +139,16 @@ class LockActivity : FragmentActivity() {
                             com.example.util.DeviceAdminHelper.setDeactivationAuthorized(true)
                         }
                         if (!isTestMode && targetPackage.isNotBlank()) {
-                            if (targetPackage == packageName) {
+                            if (isSelfAppOrUninstall) {
                                 appLockManager.onSelfAppInfoUnlocked()
                             }
+                            if (isInstaller && !isSelfAppInfo && !isPermissionController) {
+                                appLockManager.unlockInstallerSession()
+                            }
                             appLockManager.onPackageUnlocked(targetPackage)
-                            // For Self App Info or Admin Deactivation, just finish LockActivity so user lands directly on target
-                            if (targetPackage != packageName && !isDeactivateAdmin) {
+                            // Never attempt to launch package installer, permission controller, or self app info via launchInterceptedTarget
+                            // This prevents installer relaunch loops!
+                            if (!isSelfAppOrUninstall && !isInstaller && !isPermissionController && !isDeactivateAdmin) {
                                 appLockManager.launchInterceptedTarget(this@LockActivity, targetPackage)
                             }
                         }
@@ -149,7 +170,17 @@ class LockActivity : FragmentActivity() {
         val isTestMode = intent.getBooleanExtra(EXTRA_IS_TEST_MODE, false)
         val isDeactivateAdmin = intent.getBooleanExtra(EXTRA_ACTION_DEACTIVATE_ADMIN, false)
 
-        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank()) {
+        val isNewIntentExplicitlyProtected = appLockManager.preferences.isPackageProtected(targetPackage)
+        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank() && appLockManager.isLauncherOrSystemUI(targetPackage) && !isNewIntentExplicitlyProtected) {
+            finish()
+            return
+        }
+
+        val isInstaller = appLockManager.isPackageInstaller(targetPackage)
+        val isSelfAppInfo = targetPackage == packageName
+        val isPermissionController = targetPackage == "com.google.android.permissioncontroller" || targetPackage == "com.android.permissioncontroller"
+
+        if (!isTestMode && !isDeactivateAdmin && targetPackage.isNotBlank() && !isInstaller && !isPermissionController && !isSelfAppInfo) {
             appLockManager.storeInterceptedTarget(targetPackage, targetClass)
         }
     }

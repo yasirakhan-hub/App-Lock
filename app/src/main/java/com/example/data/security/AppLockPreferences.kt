@@ -14,10 +14,11 @@ class AppLockPreferences(context: Context) {
 
     // In-memory cache of protected package names to eliminate SharedPreferences XML/map queries
     // on every AccessibilityEvent foreground window state check.
-    @Volatile
-    private var cachedProtectedPackages: Set<String>? = null
-
+    // Made companion object volatile cache so all AppLockPreferences instances share cache consistency.
     companion object {
+        @Volatile
+        private var cachedProtectedPackages: Set<String>? = null
+
         private const val PREFS_NAME = "secure_applock_prefs"
 
         private const val KEY_PIN_HASH = "pin_hash"
