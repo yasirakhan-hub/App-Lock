@@ -1068,6 +1068,10 @@ class ExampleRobolectricTest {
             service.isSettingsOrSecurityPackage("com.miui.securitycenter"))
         assertFalse("com.instagram.android is not a settings package",
             service.isSettingsOrSecurityPackage("com.instagram.android"))
+        assertFalse("Samsung Telephony UI must NOT be classified as settings package",
+            service.isSettingsOrSecurityPackage("com.samsung.android.app.telephonyui"))
+        assertFalse("Arbitrary package containing 'settings' must NOT be classified as settings package",
+            service.isSettingsOrSecurityPackage("com.example.mysettings.app"))
 
         // 2. Essential system settings must never be locked
         assertTrue("Device Admin activation is essential system setting",
@@ -1736,6 +1740,55 @@ class ExampleRobolectricTest {
         // Must still be intercepted as uninstallation protection
         assertTrue("Uninstallation must be intercepted even if package was in foreground",
             service.isPackageInstallerUninstallingSelf(permControllerPkg, uninstallerClass, uninstallEvent))
+    }
+
+    @Test
+    fun testAppInfoForSelfRequiresConfirmedIdentifierAndContextualAppDetails() {
+        val service = org.robolectric.Robolectric.buildService(com.example.service.AppLockAccessibilityService::class.java).create().get()
+
+        // 1. Generic screen with "Clear" or "Storage" without Smart AppLock identifier must return false
+        val genericEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.android.settings"
+            className = "com.android.settings.Settings"
+            text.add("Clear cache or storage")
+        }
+        assertFalse("Generic text containing Clear/Storage without app identifier must NOT trigger self App Info protection",
+            service.isAppInfoForSelf("com.android.settings", "com.android.settings.Settings", genericEvent))
+
+        // 2. App Details class name alone without confirmed Smart AppLock identifier must return false
+        val unconfirmedAppDetailsEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.android.settings"
+            className = "com.android.settings.applications.InstalledAppDetailsTop"
+            text.add("Settings")
+        }
+        assertFalse("App Details class alone without confirmed Smart AppLock identifier must NOT trigger protection",
+            service.isAppInfoForSelf("com.android.settings", "com.android.settings.applications.InstalledAppDetailsTop", unconfirmedAppDetailsEvent))
+
+        // 3. Genuine Smart AppLock App Details screen with confirmed app identifier and App Details class returns true
+        val genuineAppDetailsEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.android.settings"
+            className = "com.android.settings.applications.InstalledAppDetailsTop"
+            text.add("Smart AppLock")
+        }
+        assertTrue("Genuine Smart AppLock App Details screen with confirmed identifier MUST trigger protection",
+            service.isAppInfoForSelf("com.android.settings", "com.android.settings.applications.InstalledAppDetailsTop", genuineAppDetailsEvent))
+
+        // 4. Non-settings package (e.g. Samsung Telephony UI or Paytm) returns false immediately
+        val telephonyEvent = android.view.accessibility.AccessibilityEvent.obtain(
+            android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ).apply {
+            packageName = "com.samsung.android.app.telephonyui"
+            className = "com.samsung.android.app.telephonyui.netsettings.NetSettingsActivity"
+            text.add("Clear")
+        }
+        assertFalse("Telephony UI must NEVER trigger self App Info protection",
+            service.isAppInfoForSelf("com.samsung.android.app.telephonyui", "com.samsung.android.app.telephonyui.netsettings.NetSettingsActivity", telephonyEvent))
     }
 }
 
