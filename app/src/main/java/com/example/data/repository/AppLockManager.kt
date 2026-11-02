@@ -704,14 +704,14 @@ class AppLockManager private constructor(private val context: Context) {
      * Identifies Android system settings and security managers.
      */
     fun isSettingsPackage(packageName: String): Boolean {
+        if (packageName.isBlank()) return false
         val lower = packageName.lowercase()
         return lower == "com.android.settings" ||
                 lower == "com.google.android.settings" ||
-                lower.contains("settings") ||
-                lower.contains("securitycenter") ||
-                lower.contains("safecenter") ||
-                lower.contains("permissionmanager") ||
-                lower == "com.samsung.android.app.telephonyui" ||
+                lower == "com.miui.securitycenter" ||
+                lower == "com.coloros.safecenter" ||
+                lower == "com.oplus.safecenter" ||
+                lower == "com.vivo.permissionmanager" ||
                 lower == "com.samsung.android.sm_cn"
     }
 }

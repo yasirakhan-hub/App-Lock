@@ -198,18 +198,16 @@ class AppLockAccessibilityService : AccessibilityService() {
                 val pkgNodes = rootNode.findAccessibilityNodeInfosByText("secjkv")
                 nodeHasIdentifier = !appNameNodes.isNullOrEmpty() || !pkgNodes.isNullOrEmpty()
 
-                // Distinguish App Info detail page from general app list (ManageApplications)
+                // Distinguish App Info detail page from general settings lists:
+                // Require strong contextual App Details action indicators (e.g. Force stop, or Uninstall + Storage)
                 val forceStopNodes = rootNode.findAccessibilityNodeInfosByText("Force stop")
                 val uninstallNodes = rootNode.findAccessibilityNodeInfosByText("Uninstall")
                 val disableNodes = rootNode.findAccessibilityNodeInfosByText("Disable")
                 val storageNodes = rootNode.findAccessibilityNodeInfosByText("Storage")
-                val clearDataNodes = rootNode.findAccessibilityNodeInfosByText("Clear")
 
                 hasAppDetailsIndicators = !forceStopNodes.isNullOrEmpty() ||
-                        !uninstallNodes.isNullOrEmpty() ||
                         !disableNodes.isNullOrEmpty() ||
-                        !storageNodes.isNullOrEmpty() ||
-                        !clearDataNodes.isNullOrEmpty()
+                        (!uninstallNodes.isNullOrEmpty() && !storageNodes.isNullOrEmpty())
             } catch (_: Exception) {
             }
         }
@@ -219,22 +217,23 @@ class AppLockAccessibilityService : AccessibilityService() {
 
         val isAppDetailsActivity = isAppDetailsClass(className)
 
-        // Intercept if:
-        // a) Class name is a recognized App Details screen, OR
-        // b) Screen contains App Info action buttons (Force stop, Uninstall, Storage, etc.), OR
-        // c) Direct event text explicitly identified our app name/package on a Settings screen
-        return isAppDetailsActivity || hasAppDetailsIndicators || hasDirectIdentifier
+        // Intercept ONLY when:
+        // 1. Confirmed Smart AppLock identifier is present on the screen (hasAppIdentifier == true), AND
+        // 2. Strong contextual evidence confirms this is Smart AppLock's Android App Details screen:
+        //    (a) Activity class name explicitly matches an App Details screen, OR
+        //    (b) Screen explicitly displays App Details action controls (Force stop, Disable, or Uninstall + Storage)
+        return isAppDetailsActivity || hasAppDetailsIndicators
     }
 
     internal fun isSettingsOrSecurityPackage(pkgName: String): Boolean {
+        if (pkgName.isBlank()) return false
         val lower = pkgName.lowercase()
         return lower == "com.android.settings" ||
                 lower == "com.google.android.settings" ||
-                lower.contains("settings") ||
-                lower.contains("securitycenter") ||
-                lower.contains("safecenter") ||
-                lower.contains("permissionmanager") ||
-                lower == "com.samsung.android.app.telephonyui" ||
+                lower == "com.miui.securitycenter" ||
+                lower == "com.coloros.safecenter" ||
+                lower == "com.oplus.safecenter" ||
+                lower == "com.vivo.permissionmanager" ||
                 lower == "com.samsung.android.sm_cn"
     }
 
