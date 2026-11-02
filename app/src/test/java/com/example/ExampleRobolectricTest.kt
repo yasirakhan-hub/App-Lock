@@ -182,6 +182,42 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun testBiometricRateLimitingAndFallbackPersistence() {
+        // Initially 0 biometric failures
+        assertEquals(0, preferences.getBiometricFailedAttempts())
+        assertFalse(preferences.isBiometricLimitReached())
+
+        // Record 1st failure
+        val f1 = preferences.recordBiometricFailedAttempt()
+        assertEquals(1, f1)
+        assertEquals(1, preferences.getBiometricFailedAttempts())
+        assertFalse(preferences.isBiometricLimitReached())
+
+        // Record 2nd failure
+        val f2 = preferences.recordBiometricFailedAttempt()
+        assertEquals(2, f2)
+        assertEquals(2, preferences.getBiometricFailedAttempts())
+        assertFalse(preferences.isBiometricLimitReached())
+
+        // Record 3rd failure -> limit reached
+        val f3 = preferences.recordBiometricFailedAttempt()
+        assertEquals(3, f3)
+        assertEquals(3, preferences.getBiometricFailedAttempts())
+        assertTrue("3 genuine failures must trigger biometric limit reached", preferences.isBiometricLimitReached())
+
+        // Creating a new preferences instance still observes the failure count (persistence across prompt dismissal/reopen)
+        val prefInstance2 = AppLockPreferences(context)
+        assertEquals(3, prefInstance2.getBiometricFailedAttempts())
+        assertTrue("Biometric limit reached must persist across instances", prefInstance2.isBiometricLimitReached())
+
+        // Reset biometric failures on successful unlock
+        preferences.resetBiometricFailedAttempts()
+        assertEquals(0, preferences.getBiometricFailedAttempts())
+        assertFalse(preferences.isBiometricLimitReached())
+        assertEquals(0, prefInstance2.getBiometricFailedAttempts())
+    }
+
+    @Test
     fun testDeviceAdminHelper() {
         val componentName = com.example.util.DeviceAdminHelper.getComponentName(context)
         assertEquals(context.packageName, componentName.packageName)

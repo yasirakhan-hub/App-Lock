@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import com.example.data.repository.AppDiscoveryRepository
 import com.example.data.repository.AppLockManager
+import com.example.data.security.AppLockPreferences
 import com.example.data.security.AppLockPreferences.AuthMethod
 import com.example.ui.common.BiometricActionRow
 import com.example.ui.common.NeoButton
@@ -237,9 +238,11 @@ class LockActivity : FragmentActivity() {
         val isBiometricSupported = remember {
             BiometricHelper.isBiometricAvailable(this@LockActivity)
         }
-        val isFingerprintActive = prefs.isFingerprintEnabled() && BiometricHelper.isFingerprintAvailableAndEnrolled(this@LockActivity)
         val isFaceActive = prefs.isFaceEnabled() && BiometricHelper.isFaceAvailableAndEnrolled(this@LockActivity)
-        val isBiometricEnabled = prefs.isBiometricEnabled() && isBiometricSupported
+        var biometricFailures by remember { mutableIntStateOf(prefs.getBiometricFailedAttempts()) }
+        val isBiometricAllowed = prefs.isBiometricEnabled() &&
+                isBiometricSupported &&
+                biometricFailures < AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS
 
         val negativeBtnText = when (authMethod) {
             AuthMethod.PIN_4, AuthMethod.PIN_6 -> "Use PIN"
@@ -277,6 +280,7 @@ class LockActivity : FragmentActivity() {
                 }
                 BiometricHelper.cancelCurrentPrompt()
                 prefs.resetFailedAttempts()
+                prefs.resetBiometricFailedAttempts()
                 scope.launch {
                     if (isBiometricSuccess && isFaceActive) {
                         delay(250L)
@@ -287,11 +291,11 @@ class LockActivity : FragmentActivity() {
         }
 
         fun triggerBiometricPrompt() {
-            if (isBiometricEnabled && lockoutSeconds == 0 && !isUnlocked.get()) {
+            if (isBiometricAllowed && lockoutSeconds == 0 && !isUnlocked.get()) {
                 BiometricHelper.showBiometricPrompt(
                     activity = this@LockActivity,
-                    title = "Unlock $targetAppName",
-                    subtitle = "Touch the fingerprint sensor to unlock",
+                    title = "Biometric Verification",
+                    subtitle = "Verify biometric to unlock $targetAppName",
                     negativeButtonText = negativeBtnText,
                     onSuccess = {
                         performUnlock(isBiometricSuccess = true)
@@ -302,14 +306,28 @@ class LockActivity : FragmentActivity() {
                             if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
                                 errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
                             ) {
+                                BiometricHelper.cancelCurrentPrompt()
+                                biometricFailures = AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS
                                 errorMessage = "Biometric sensor locked. Please use ${authMethod.displayName}."
                             }
                         }
                     },
                     onFailed = {
                         if (!isUnlocked.get()) {
-                            neonFaceState = NeonFaceState.FAILURE
+                            val count = prefs.recordBiometricFailedAttempt()
+                            biometricFailures = count
+                            if (isFaceActive) {
+                                neonFaceState = NeonFaceState.FAILURE
+                            }
                             triggerHapticFailureFeedback()
+
+                            if (count >= AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS) {
+                                BiometricHelper.cancelCurrentPrompt()
+                                errorMessage = "Biometric limit reached. Please use ${authMethod.displayName}."
+                            } else {
+                                errorMessage = "Biometric not recognized ($count of ${AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS})"
+                            }
+
                             scope.launch {
                                 delay(1200L)
                                 if (!isUnlocked.get()) {
@@ -347,11 +365,13 @@ class LockActivity : FragmentActivity() {
         }
 
         LaunchedEffect(Unit) {
-            if (isBiometricEnabled && lockoutSeconds == 0 && !isUnlocked.get()) {
+            if (isBiometricAllowed && lockoutSeconds == 0 && !isUnlocked.get()) {
                 delay(300L)
                 if (!isUnlocked.get()) {
                     triggerBiometricPrompt()
                 }
+            } else if (biometricFailures >= AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS) {
+                errorMessage = "Biometric limit reached. Please use ${authMethod.displayName}."
             }
         }
 
@@ -508,7 +528,7 @@ class LockActivity : FragmentActivity() {
                             },
                             lockoutSeconds = lockoutSeconds,
                             extraLeftAction = {
-                                if (isBiometricEnabled) {
+                                if (isBiometricAllowed) {
                                     NeoCircularButton(
                                         onClick = { triggerBiometricPrompt() },
                                         size = 70.dp,
@@ -517,7 +537,7 @@ class LockActivity : FragmentActivity() {
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Fingerprint,
-                                            contentDescription = "Unlock with Fingerprint",
+                                            contentDescription = "Unlock with Biometrics",
                                             tint = NeoPalette.TextInverse,
                                             modifier = Modifier.size(32.dp)
                                         )
@@ -567,7 +587,7 @@ class LockActivity : FragmentActivity() {
                                 }
                             )
 
-                            if (isBiometricEnabled) {
+                            if (isBiometricAllowed) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 BiometricActionRow(
                                     onBiometricClick = { triggerBiometricPrompt() },
@@ -621,7 +641,7 @@ class LockActivity : FragmentActivity() {
                                 }
                             )
 
-                            if (isBiometricEnabled) {
+                            if (isBiometricAllowed) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 BiometricActionRow(
                                     onBiometricClick = { triggerBiometricPrompt() },
@@ -646,7 +666,7 @@ class LockActivity : FragmentActivity() {
                 }
 
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (isBiometricEnabled && prefs.hasRecoveryQuestion()) {
+                    if (prefs.hasRecoveryQuestion()) {
                         TextButton(
                             onClick = { showRecoveryDialog = true },
                             modifier = Modifier.testTag("forgot_pin_link_button")
