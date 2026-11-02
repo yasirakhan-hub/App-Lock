@@ -42,6 +42,66 @@ object BiometricHelper {
     }
 
     /**
+     * Returns true if device hardware supports fingerprint authentication.
+     */
+    fun hasFingerprintHardware(context: Context): Boolean {
+        return try {
+            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_FINGERPRINT)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Returns true if device hardware supports face authentication.
+     */
+    fun hasFaceHardware(context: Context): Boolean {
+        return try {
+            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_FACE)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Checks if fingerprint authentication is available and enrolled.
+     * Checks hardware feature and FingerprintManagerCompat enrollment.
+     */
+    @Suppress("DEPRECATION")
+    fun isFingerprintAvailableAndEnrolled(context: Context): Boolean {
+        if (!hasFingerprintHardware(context)) return false
+        return try {
+            val fpCompat = androidx.core.hardware.fingerprint.FingerprintManagerCompat.from(context)
+            fpCompat.isHardwareDetected && fpCompat.hasEnrolledFingerprints()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Checks if face authentication hardware is supported and available on this device.
+     *
+     * Note on Android platform architecture:
+     * Android BiometricPrompt aggregates all biometrics (fingerprint, face, iris) into unified authenticators.
+     * Android does not expose modality-specific callbacks to third-party applications on authentication.
+     */
+    fun isFaceSupportedAndAvailable(context: Context): Boolean {
+        if (!hasFaceHardware(context)) return false
+        return isBiometricAvailable(context)
+    }
+
+    fun isFaceAvailableAndEnrolled(context: Context): Boolean {
+        return isFaceSupportedAndAvailable(context)
+    }
+
+    /**
+     * Discloses whether the device environment can guarantee separate modality enforcement.
+     * Always returns false on standard Android platforms because BiometricPrompt aggregates
+     * all enrolled biometrics into a single system authentication dialog.
+     */
+    fun canEnforceSeparateBiometricModality(): Boolean = false
+
+    /**
      * Cancels any currently active system BiometricPrompt without firing error callbacks.
      */
     fun cancelCurrentPrompt() {

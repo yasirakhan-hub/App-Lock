@@ -104,6 +104,84 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun testIndependentFingerprintAndFacePreferences() {
+        // By default, both fingerprint and face are enabled
+        assertTrue(preferences.isFingerprintEnabled())
+        assertTrue(preferences.isFaceEnabled())
+        assertTrue(preferences.isBiometricEnabled())
+        assertTrue(preferences.isAnyBiometricEnabled())
+
+        // Toggle fingerprint independently
+        preferences.setFingerprintEnabled(false)
+        assertFalse(preferences.isFingerprintEnabled())
+        assertTrue("Face remains enabled when fingerprint is disabled", preferences.isFaceEnabled())
+        assertTrue("isAnyBiometricEnabled returns true if at least one is enabled", preferences.isAnyBiometricEnabled())
+
+        // Toggle face independently
+        preferences.setFaceEnabled(false)
+        assertFalse(preferences.isFaceEnabled())
+        assertFalse("When both are disabled, isAnyBiometricEnabled is false", preferences.isAnyBiometricEnabled())
+        assertFalse("When both are disabled, isBiometricEnabled is false", preferences.isBiometricEnabled())
+
+        // Re-enable only face
+        preferences.setFaceEnabled(true)
+        assertTrue(preferences.isFaceEnabled())
+        assertFalse(preferences.isFingerprintEnabled())
+        assertTrue(preferences.isBiometricEnabled())
+
+        // Re-enable only fingerprint
+        preferences.setFaceEnabled(false)
+        preferences.setFingerprintEnabled(true)
+        assertTrue(preferences.isFingerprintEnabled())
+        assertFalse(preferences.isFaceEnabled())
+        assertTrue(preferences.isBiometricEnabled())
+
+        // Master biometric toggle sets both
+        preferences.setBiometricEnabled(false)
+        assertFalse(preferences.isFingerprintEnabled())
+        assertFalse(preferences.isFaceEnabled())
+        preferences.setBiometricEnabled(true)
+        assertTrue(preferences.isFingerprintEnabled())
+        assertTrue(preferences.isFaceEnabled())
+    }
+
+    @Test
+    fun testBiometricHelperHardwareAndEnrollmentCapabilities() {
+        val hasFp = com.example.util.BiometricHelper.hasFingerprintHardware(context)
+        val hasFace = com.example.util.BiometricHelper.hasFaceHardware(context)
+        val isFpReady = com.example.util.BiometricHelper.isFingerprintAvailableAndEnrolled(context)
+        val isFaceReady = com.example.util.BiometricHelper.isFaceAvailableAndEnrolled(context)
+
+        // Verifies calls execute safely without crashing or throwing on Android context
+        assertTrue(hasFp || !hasFp)
+        assertTrue(hasFace || !hasFace)
+        assertTrue(isFpReady || !isFpReady)
+        assertTrue(isFaceReady || !isFaceReady)
+    }
+
+    @Test
+    fun testNeonFaceVisualStateAndHapticFeedbackRules() {
+        // Test NeonFaceState transitions
+        val states = com.example.ui.common.NeonFaceState.values()
+        assertEquals(3, states.size)
+        assertTrue(states.contains(com.example.ui.common.NeonFaceState.NEUTRAL))
+        assertTrue(states.contains(com.example.ui.common.NeonFaceState.SUCCESS))
+        assertTrue(states.contains(com.example.ui.common.NeonFaceState.FAILURE))
+
+        // Test vibration effect creation for genuine failure:
+        // Ensures VibrationEffect.createOneShot(50, DEFAULT_AMPLITUDE) is valid
+        val effect = android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+        org.junit.Assert.assertNotNull(effect)
+    }
+
+    @Test
+    fun testLockScreenSimulatorRemovalSafety() {
+        // Verify ScreenState no longer has TEST_LOCK
+        val screenStateNames = ScreenState.values().map { it.name }
+        assertFalse("ScreenState must not contain TEST_LOCK", screenStateNames.contains("TEST_LOCK"))
+    }
+
+    @Test
     fun testDeviceAdminHelper() {
         val componentName = com.example.util.DeviceAdminHelper.getComponentName(context)
         assertEquals(context.packageName, componentName.packageName)

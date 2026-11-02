@@ -31,6 +31,10 @@ import androidx.fragment.app.FragmentActivity
 import com.example.data.security.AppLockPreferences
 import com.example.data.security.AppLockPreferences.AuthMethod
 import com.example.util.BiometricHelper
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -59,11 +63,15 @@ fun AuthChallengeDialog(
     var enteredPin by remember { mutableStateOf("") }
     var enteredPassword by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
+    var neonFaceState by remember { mutableStateOf(NeonFaceState.NEUTRAL) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var lockoutSeconds by remember { mutableIntStateOf(preferences.getRemainingLockoutSeconds()) }
 
     val isBiometricSupported = remember(activity) {
         activity != null && BiometricHelper.isBiometricAvailable(activity)
+    }
+    val isFaceActive = remember(activity, preferences) {
+        activity != null && preferences.isFaceEnabled() && BiometricHelper.isFaceAvailableAndEnrolled(activity)
     }
     val isBiometricEnabled = isBiometricSupported && preferences.isBiometricEnabled()
 
@@ -75,11 +83,39 @@ fun AuthChallengeDialog(
 
     val isAuthorizedConsumed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
-    fun handleAuthorizedSuccess() {
+    fun triggerHapticFailureFeedback() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = context.getSystemService(VibratorManager::class.java)
+                val vibrator = vibratorManager?.defaultVibrator
+                vibrator?.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = context.getSystemService(Vibrator::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator?.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(50)
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    fun handleAuthorizedSuccess(isBiometricSuccess: Boolean = false) {
         if (isAuthorizedConsumed.compareAndSet(false, true)) {
+            if (isBiometricSuccess && isFaceActive) {
+                neonFaceState = NeonFaceState.SUCCESS
+            }
             BiometricHelper.cancelCurrentPrompt()
             preferences.resetFailedAttempts()
-            onAuthorized()
+            scope.launch {
+                if (isBiometricSuccess && isFaceActive) {
+                    delay(250L)
+                }
+                onAuthorized()
+            }
         }
     }
 
@@ -91,15 +127,33 @@ fun AuthChallengeDialog(
                 subtitle = subtitle,
                 negativeButtonText = negativeBtnLabel,
                 onSuccess = {
-                    handleAuthorizedSuccess()
+                    handleAuthorizedSuccess(isBiometricSuccess = true)
                 },
                 onError = { errorCode, _ ->
                     if (!isAuthorizedConsumed.get()) {
+                        neonFaceState = NeonFaceState.NEUTRAL
                         if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
                             errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
                         ) {
-                            errorMsg = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                            errorMsg = "Biometric sensor locked. Please use ${authMethod.displayName}."
                         }
+                    }
+                },
+                onFailed = {
+                    if (!isAuthorizedConsumed.get()) {
+                        neonFaceState = NeonFaceState.FAILURE
+                        triggerHapticFailureFeedback()
+                        scope.launch {
+                            delay(1200L)
+                            if (!isAuthorizedConsumed.get()) {
+                                neonFaceState = NeonFaceState.NEUTRAL
+                            }
+                        }
+                    }
+                },
+                onCanceled = {
+                    if (!isAuthorizedConsumed.get()) {
+                        neonFaceState = NeonFaceState.NEUTRAL
                     }
                 }
             )
@@ -144,7 +198,11 @@ fun AuthChallengeDialog(
         onDismissRequest = onDismiss,
         containerColor = NeoPalette.SurfaceDark,
         icon = {
-            NeoGoldPadlockEmblem(badgeSize = 56.dp, isOpenShackle = false)
+            if (isFaceActive || neonFaceState != NeonFaceState.NEUTRAL) {
+                NeonFaceFeedback(state = neonFaceState, size = 64.dp)
+            } else {
+                NeoGoldPadlockEmblem(badgeSize = 56.dp, isOpenShackle = false)
+            }
         },
         title = {
             Text(
@@ -205,7 +263,7 @@ fun AuthChallengeDialog(
                                     if (next.length == pinLength) {
                                         scope.launch {
                                             if (preferences.verifyCredential(next)) {
-                                                handleAuthorizedSuccess()
+                                                handleAuthorizedSuccess(isBiometricSuccess = false)
                                             } else {
                                                 handleFailedAttempt("Incorrect PIN")
                                                 delay(300L)
@@ -271,7 +329,7 @@ fun AuthChallengeDialog(
                             onPatternComplete = { pattern ->
                                 if (lockoutSeconds > 0) return@PatternLockGrid
                                 if (preferences.verifyCredential(pattern)) {
-                                    handleAuthorizedSuccess()
+                                    handleAuthorizedSuccess(isBiometricSuccess = false)
                                 } else {
                                     handleFailedAttempt("Incorrect pattern")
                                 }
@@ -318,7 +376,7 @@ fun AuthChallengeDialog(
                                     return@PasswordAuthInput
                                 }
                                 if (preferences.verifyCredential(enteredPassword)) {
-                                    handleAuthorizedSuccess()
+                                    handleAuthorizedSuccess(isBiometricSuccess = false)
                                 } else {
                                     handleFailedAttempt("Incorrect password")
                                     enteredPassword = ""

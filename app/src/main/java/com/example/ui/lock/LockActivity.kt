@@ -59,6 +59,8 @@ import com.example.ui.common.NeoInsetBox
 import com.example.ui.common.NeoPalette
 import com.example.ui.common.NeoShapes
 import com.example.ui.common.NeoStatusBadge
+import com.example.ui.common.NeonFaceFeedback
+import com.example.ui.common.NeonFaceState
 import com.example.ui.common.PasswordAuthInput
 import com.example.ui.common.PatternLockGrid
 import com.example.ui.common.PinDots
@@ -67,6 +69,10 @@ import com.example.ui.theme.AppLockTheme
 import com.example.util.BiometricHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 
 /**
  * Fullscreen lock screen activity displayed over protected applications.
@@ -223,6 +229,7 @@ class LockActivity : FragmentActivity() {
         var enteredPin by remember { mutableStateOf("") }
         var enteredPassword by remember { mutableStateOf("") }
         var isError by remember { mutableStateOf(false) }
+        var neonFaceState by remember { mutableStateOf(NeonFaceState.NEUTRAL) }
         var errorMessage by remember { mutableStateOf<String?>(null) }
         var lockoutSeconds by remember { mutableIntStateOf(prefs.getRemainingLockoutSeconds()) }
         var showRecoveryDialog by remember { mutableStateOf(false) }
@@ -230,6 +237,8 @@ class LockActivity : FragmentActivity() {
         val isBiometricSupported = remember {
             BiometricHelper.isBiometricAvailable(this@LockActivity)
         }
+        val isFingerprintActive = prefs.isFingerprintEnabled() && BiometricHelper.isFingerprintAvailableAndEnrolled(this@LockActivity)
+        val isFaceActive = prefs.isFaceEnabled() && BiometricHelper.isFaceAvailableAndEnrolled(this@LockActivity)
         val isBiometricEnabled = prefs.isBiometricEnabled() && isBiometricSupported
 
         val negativeBtnText = when (authMethod) {
@@ -240,11 +249,40 @@ class LockActivity : FragmentActivity() {
 
         val isUnlocked = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
-        fun performUnlock() {
+        fun triggerHapticFailureFeedback() {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val vibratorManager = getSystemService(VibratorManager::class.java)
+                    val vibrator = vibratorManager?.defaultVibrator
+                    vibrator?.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    val vibrator = getSystemService(Vibrator::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator?.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(50)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        fun performUnlock(isBiometricSuccess: Boolean = false) {
             if (isUnlocked.compareAndSet(false, true)) {
+                // Display biometric visual feedback if unlocked via biometric prompt
+                if (isBiometricSuccess && isFaceActive) {
+                    neonFaceState = NeonFaceState.SUCCESS
+                }
                 BiometricHelper.cancelCurrentPrompt()
                 prefs.resetFailedAttempts()
-                onUnlockSuccess()
+                scope.launch {
+                    if (isBiometricSuccess && isFaceActive) {
+                        delay(250L)
+                    }
+                    onUnlockSuccess()
+                }
             }
         }
 
@@ -256,15 +294,33 @@ class LockActivity : FragmentActivity() {
                     subtitle = "Touch the fingerprint sensor to unlock",
                     negativeButtonText = negativeBtnText,
                     onSuccess = {
-                        performUnlock()
+                        performUnlock(isBiometricSuccess = true)
                     },
                     onError = { errorCode, _ ->
                         if (!isUnlocked.get()) {
+                            neonFaceState = NeonFaceState.NEUTRAL
                             if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
                                 errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
                             ) {
-                                errorMessage = "Fingerprint sensor locked. Please use ${authMethod.displayName}."
+                                errorMessage = "Biometric sensor locked. Please use ${authMethod.displayName}."
                             }
+                        }
+                    },
+                    onFailed = {
+                        if (!isUnlocked.get()) {
+                            neonFaceState = NeonFaceState.FAILURE
+                            triggerHapticFailureFeedback()
+                            scope.launch {
+                                delay(1200L)
+                                if (!isUnlocked.get()) {
+                                    neonFaceState = NeonFaceState.NEUTRAL
+                                }
+                            }
+                        }
+                    },
+                    onCanceled = {
+                        if (!isUnlocked.get()) {
+                            neonFaceState = NeonFaceState.NEUTRAL
                         }
                     }
                 )
@@ -338,7 +394,13 @@ class LockActivity : FragmentActivity() {
                         )
                     }
 
-                    if (targetAppIcon != null) {
+                    if (isFaceActive || neonFaceState != NeonFaceState.NEUTRAL) {
+                        NeonFaceFeedback(
+                            state = neonFaceState,
+                            size = 86.dp,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                    } else if (targetAppIcon != null) {
                         Box(
                             modifier = Modifier
                                 .size(82.dp)
@@ -426,7 +488,7 @@ class LockActivity : FragmentActivity() {
                                         scope.launch {
                                             val isCorrect = prefs.verifyCredential(newPin)
                                             if (isCorrect) {
-                                                performUnlock()
+                                                performUnlock(isBiometricSuccess = false)
                                             } else {
                                                 recordFailure("PIN")
                                                 delay(400L)
@@ -498,7 +560,7 @@ class LockActivity : FragmentActivity() {
                                 onPatternComplete = { pattern ->
                                     if (lockoutSeconds > 0) return@PatternLockGrid
                                     if (prefs.verifyCredential(pattern)) {
-                                        performUnlock()
+                                        performUnlock(isBiometricSuccess = false)
                                     } else {
                                         recordFailure("pattern")
                                     }
@@ -551,7 +613,7 @@ class LockActivity : FragmentActivity() {
                                         return@PasswordAuthInput
                                     }
                                     if (prefs.verifyCredential(enteredPassword)) {
-                                        performUnlock()
+                                        performUnlock(isBiometricSuccess = false)
                                     } else {
                                         recordFailure("password")
                                         enteredPassword = ""
