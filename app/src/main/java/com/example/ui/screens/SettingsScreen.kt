@@ -259,7 +259,7 @@ fun SettingsScreen(
             )
 
             Text(
-                text = "Android BiometricPrompt securely verifies biometrics via system dialog. Android aggregates enrolled biometrics at the OS level; turning off both disables biometric unlock.",
+                text = "Android controls which enrolled biometric modality is accepted. Face Unlock ON does not guarantee face-only authentication, and Face Unlock OFF does not guarantee fingerprint-only authentication. Turning off both disables biometric unlock.",
                 style = MaterialTheme.typography.bodySmall,
                 color = NeoPalette.TextSecondary,
                 modifier = Modifier.padding(bottom = 6.dp)

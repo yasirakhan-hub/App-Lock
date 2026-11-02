@@ -39,6 +39,9 @@ class AppLockPreferences(context: Context) {
 
         private const val KEY_FAILED_ATTEMPTS = "failed_attempts"
         private const val KEY_LOCKOUT_UNTIL_TIMESTAMP = "lockout_until_timestamp"
+        private const val KEY_BIOMETRIC_FAILED_ATTEMPTS = "biometric_failed_attempts"
+
+        const val MAX_BIOMETRIC_FAILED_ATTEMPTS = 3
 
         private const val KEY_CALCULATOR_DISGUISE_ENABLED = "calculator_disguise_enabled"
         private const val KEY_CALC_SECRET_HASH = "calc_secret_hash"
@@ -445,7 +448,28 @@ class AppLockPreferences(context: Context) {
         prefs.edit()
             .putInt(KEY_FAILED_ATTEMPTS, 0)
             .putLong(KEY_LOCKOUT_UNTIL_TIMESTAMP, 0L)
+            .putInt(KEY_BIOMETRIC_FAILED_ATTEMPTS, 0)
             .apply()
+    }
+
+    // --- Biometric rate limiting (3 genuine failure limit) ---
+
+    fun getBiometricFailedAttempts(): Int {
+        return prefs.getInt(KEY_BIOMETRIC_FAILED_ATTEMPTS, 0)
+    }
+
+    fun recordBiometricFailedAttempt(): Int {
+        val next = getBiometricFailedAttempts() + 1
+        prefs.edit().putInt(KEY_BIOMETRIC_FAILED_ATTEMPTS, next).apply()
+        return next
+    }
+
+    fun isBiometricLimitReached(): Boolean {
+        return getBiometricFailedAttempts() >= MAX_BIOMETRIC_FAILED_ATTEMPTS
+    }
+
+    fun resetBiometricFailedAttempts() {
+        prefs.edit().putInt(KEY_BIOMETRIC_FAILED_ATTEMPTS, 0).apply()
     }
 
     /**

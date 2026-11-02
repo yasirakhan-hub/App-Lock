@@ -73,7 +73,10 @@ fun AuthChallengeDialog(
     val isFaceActive = remember(activity, preferences) {
         activity != null && preferences.isFaceEnabled() && BiometricHelper.isFaceAvailableAndEnrolled(activity)
     }
-    val isBiometricEnabled = isBiometricSupported && preferences.isBiometricEnabled()
+    var biometricFailures by remember { mutableIntStateOf(preferences.getBiometricFailedAttempts()) }
+    val isBiometricAllowed = preferences.isBiometricEnabled() &&
+            isBiometricSupported &&
+            biometricFailures < AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS
 
     val negativeBtnLabel = when (authMethod) {
         AuthMethod.PIN_4, AuthMethod.PIN_6 -> "Use PIN"
@@ -110,6 +113,7 @@ fun AuthChallengeDialog(
             }
             BiometricHelper.cancelCurrentPrompt()
             preferences.resetFailedAttempts()
+            preferences.resetBiometricFailedAttempts()
             scope.launch {
                 if (isBiometricSuccess && isFaceActive) {
                     delay(250L)
@@ -120,10 +124,10 @@ fun AuthChallengeDialog(
     }
 
     fun triggerBiometric() {
-        if (activity != null && isBiometricEnabled && lockoutSeconds == 0 && !isAuthorizedConsumed.get()) {
+        if (activity != null && isBiometricAllowed && lockoutSeconds == 0 && !isAuthorizedConsumed.get()) {
             BiometricHelper.showBiometricPrompt(
                 activity = activity,
-                title = title,
+                title = "Biometric Verification",
                 subtitle = subtitle,
                 negativeButtonText = negativeBtnLabel,
                 onSuccess = {
@@ -135,14 +139,28 @@ fun AuthChallengeDialog(
                         if (errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT ||
                             errorCode == androidx.biometric.BiometricPrompt.ERROR_LOCKOUT_PERMANENT
                         ) {
+                            BiometricHelper.cancelCurrentPrompt()
+                            biometricFailures = AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS
                             errorMsg = "Biometric sensor locked. Please use ${authMethod.displayName}."
                         }
                     }
                 },
                 onFailed = {
                     if (!isAuthorizedConsumed.get()) {
-                        neonFaceState = NeonFaceState.FAILURE
+                        val count = preferences.recordBiometricFailedAttempt()
+                        biometricFailures = count
+                        if (isFaceActive) {
+                            neonFaceState = NeonFaceState.FAILURE
+                        }
                         triggerHapticFailureFeedback()
+
+                        if (count >= AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS) {
+                            BiometricHelper.cancelCurrentPrompt()
+                            errorMsg = "Biometric limit reached. Please use ${authMethod.displayName}."
+                        } else {
+                            errorMsg = "Biometric not recognized ($count of ${AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS})"
+                        }
+
                         scope.launch {
                             delay(1200L)
                             if (!isAuthorizedConsumed.get()) {
@@ -179,11 +197,13 @@ fun AuthChallengeDialog(
     }
 
     LaunchedEffect(Unit) {
-        if (isBiometricEnabled && lockoutSeconds == 0 && !isAuthorizedConsumed.get()) {
+        if (isBiometricAllowed && lockoutSeconds == 0 && !isAuthorizedConsumed.get()) {
             delay(250L)
             if (!isAuthorizedConsumed.get()) {
                 triggerBiometric()
             }
+        } else if (biometricFailures >= AppLockPreferences.MAX_BIOMETRIC_FAILED_ATTEMPTS) {
+            errorMsg = "Biometric limit reached. Please use ${authMethod.displayName}."
         }
     }
 
@@ -283,7 +303,7 @@ fun AuthChallengeDialog(
                             },
                             lockoutSeconds = lockoutSeconds,
                             extraLeftAction = {
-                                if (isBiometricEnabled) {
+                                if (isBiometricAllowed) {
                                     NeoCircularButton(
                                         onClick = { triggerBiometric() },
                                         size = 58.dp,
@@ -292,7 +312,7 @@ fun AuthChallengeDialog(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Fingerprint,
-                                            contentDescription = "Authenticate with Fingerprint",
+                                            contentDescription = "Authenticate with Biometrics",
                                             tint = NeoPalette.TextInverse,
                                             modifier = Modifier.size(28.dp)
                                         )
@@ -336,7 +356,7 @@ fun AuthChallengeDialog(
                             }
                         )
 
-                        if (isBiometricEnabled) {
+                        if (isBiometricAllowed) {
                             Spacer(modifier = Modifier.height(8.dp))
                             BiometricActionRow(
                                 onBiometricClick = { triggerBiometric() },
@@ -384,7 +404,7 @@ fun AuthChallengeDialog(
                             }
                         )
 
-                        if (isBiometricEnabled) {
+                        if (isBiometricAllowed) {
                             Spacer(modifier = Modifier.height(8.dp))
                             BiometricActionRow(
                                 onBiometricClick = { triggerBiometric() },
