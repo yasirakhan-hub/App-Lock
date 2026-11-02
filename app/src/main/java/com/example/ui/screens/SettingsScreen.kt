@@ -69,6 +69,7 @@ import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Pin
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.ui.text.style.TextAlign
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
@@ -111,7 +112,12 @@ fun SettingsScreen(
     var isOverlayGranted by remember { mutableStateOf(PermissionHelper.isOverlayPermissionGranted(context)) }
     var isDeviceAdminActive by remember { mutableStateOf(DeviceAdminHelper.isDeviceAdminActive(context)) }
     var relockOnScreenOff by remember { mutableStateOf(preferences.isRelockOnScreenOff()) }
-    var isBiometricEnabled by remember { mutableStateOf(preferences.isBiometricEnabled()) }
+    var isFingerprintEnabled by remember { mutableStateOf(preferences.isFingerprintEnabled()) }
+    var isFaceEnabled by remember { mutableStateOf(preferences.isFaceEnabled()) }
+    var isFingerprintSupported by remember { mutableStateOf(BiometricHelper.hasFingerprintHardware(context)) }
+    var isFaceSupported by remember { mutableStateOf(BiometricHelper.hasFaceHardware(context)) }
+    var isFingerprintReady by remember { mutableStateOf(BiometricHelper.isFingerprintAvailableAndEnrolled(context)) }
+    var isFaceReady by remember { mutableStateOf(BiometricHelper.isFaceAvailableAndEnrolled(context)) }
     var isCalcSecretConfigured by remember { mutableStateOf(preferences.isCalculatorSecretConfigured()) }
     var isCalcDisguiseEnabled by remember { mutableStateOf(preferences.isCalculatorDisguiseEnabled()) }
     var activeAuthMethod by remember { mutableStateOf(preferences.getAuthMethod()) }
@@ -144,6 +150,12 @@ fun SettingsScreen(
                 isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
                 isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
                 isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+                isFingerprintSupported = BiometricHelper.hasFingerprintHardware(context)
+                isFaceSupported = BiometricHelper.hasFaceHardware(context)
+                isFingerprintReady = BiometricHelper.isFingerprintAvailableAndEnrolled(context)
+                isFaceReady = BiometricHelper.isFaceAvailableAndEnrolled(context)
+                isFingerprintEnabled = preferences.isFingerprintEnabled()
+                isFaceEnabled = preferences.isFaceEnabled()
                 activeAuthMethod = preferences.getAuthMethod()
             }
         }
@@ -157,6 +169,12 @@ fun SettingsScreen(
         isAccessibilityGranted = PermissionHelper.isAccessibilityServiceEnabled(context)
         isOverlayGranted = PermissionHelper.isOverlayPermissionGranted(context)
         isDeviceAdminActive = DeviceAdminHelper.isDeviceAdminActive(context)
+        isFingerprintSupported = BiometricHelper.hasFingerprintHardware(context)
+        isFaceSupported = BiometricHelper.hasFaceHardware(context)
+        isFingerprintReady = BiometricHelper.isFingerprintAvailableAndEnrolled(context)
+        isFaceReady = BiometricHelper.isFaceAvailableAndEnrolled(context)
+        isFingerprintEnabled = preferences.isFingerprintEnabled()
+        isFaceEnabled = preferences.isFaceEnabled()
         activeAuthMethod = preferences.getAuthMethod()
     }
 
@@ -229,13 +247,37 @@ fun SettingsScreen(
                 testTag = "settings_change_pin_row"
             )
 
-            // 2. Biometric Authentication (matching Panel 9)
+            // 2. Independent Biometric Unlock Settings
+            // Honest limitation disclosure banner
+            Text(
+                text = "BIOMETRIC AUTHENTICATION",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                color = NeoPalette.PrimaryGold,
+                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+            )
+
+            Text(
+                text = "Android BiometricPrompt securely verifies biometrics via system dialog. Android aggregates enrolled biometrics at the OS level; turning off both disables biometric unlock.",
+                style = MaterialTheme.typography.bodySmall,
+                color = NeoPalette.TextSecondary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            // 2A. Fingerprint Unlock
+            val fingerprintStatusText = when {
+                !isFingerprintSupported -> "Hardware not supported on this device"
+                !isFingerprintReady -> "No enrolled fingerprint detected"
+                else -> "Use fingerprint via Android BiometricPrompt."
+            }
+
             NeoCard(
                 shape = NeoShapes.MediumCard,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("settings_biometric_card")
+                    .testTag("settings_fingerprint_card")
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -250,29 +292,30 @@ fun SettingsScreen(
                             icon = Icons.Default.Fingerprint,
                             size = 44.dp,
                             iconSize = 22.dp,
-                            isGlowing = true
+                            isGlowing = isFingerprintEnabled && isFingerprintReady
                         )
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
                             Text(
-                                text = "Biometric Authentication",
+                                text = "Fingerprint Unlock",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = NeoPalette.TextPrimary
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Fingerprint / Face Unlock",
+                                text = fingerprintStatusText,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = NeoPalette.TextSecondary
+                                color = if (isFingerprintReady) NeoPalette.TextSecondary else NeoPalette.WarningAmber
                             )
                         }
                     }
                     Switch(
-                        checked = isBiometricEnabled,
+                        checked = isFingerprintEnabled && isFingerprintReady,
+                        enabled = isFingerprintReady,
                         onCheckedChange = { checked ->
-                            isBiometricEnabled = checked
-                            preferences.setBiometricEnabled(checked)
+                            isFingerprintEnabled = checked
+                            preferences.setFingerprintEnabled(checked)
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = NeoPalette.TextInverse,
@@ -280,7 +323,70 @@ fun SettingsScreen(
                             uncheckedThumbColor = NeoPalette.TextSecondary,
                             uncheckedTrackColor = NeoPalette.SurfaceSunken
                         ),
-                        modifier = Modifier.testTag("settings_biometric_switch")
+                        modifier = Modifier.testTag("settings_fingerprint_switch")
+                    )
+                }
+            }
+
+            // 2B. Face Unlock
+            val faceStatusText = when {
+                !isFaceSupported -> "Hardware not supported on this device"
+                !isFaceReady -> "No biometric authentication enrolled"
+                else -> "Use face recognition via Android BiometricPrompt."
+            }
+
+            NeoCard(
+                shape = NeoShapes.MediumCard,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_face_card")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        NeoIconBadge(
+                            icon = Icons.Default.Face,
+                            size = 44.dp,
+                            iconSize = 22.dp,
+                            isGlowing = isFaceEnabled && isFaceReady
+                        )
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Face Unlock",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = NeoPalette.TextPrimary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = faceStatusText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isFaceReady) NeoPalette.TextSecondary else NeoPalette.WarningAmber
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = isFaceEnabled && isFaceReady,
+                        enabled = isFaceReady,
+                        onCheckedChange = { checked ->
+                            isFaceEnabled = checked
+                            preferences.setFaceEnabled(checked)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = NeoPalette.TextInverse,
+                            checkedTrackColor = NeoPalette.PrimaryGold,
+                            uncheckedThumbColor = NeoPalette.TextSecondary,
+                            uncheckedTrackColor = NeoPalette.SurfaceSunken
+                        ),
+                        modifier = Modifier.testTag("settings_face_switch")
                     )
                 }
             }

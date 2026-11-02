@@ -33,6 +33,8 @@ class AppLockPreferences(context: Context) {
         private const val KEY_PROTECTION_ENABLED = "protection_enabled"
         private const val KEY_RELOCK_ON_SCREEN_OFF = "relock_on_screen_off"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
+        private const val KEY_FINGERPRINT_ENABLED = "fingerprint_enabled"
+        private const val KEY_FACE_ENABLED = "face_enabled"
         private const val KEY_DARK_THEME_OVERRIDE = "dark_theme_override"
 
         private const val KEY_FAILED_ATTEMPTS = "failed_attempts"
@@ -234,12 +236,59 @@ class AppLockPreferences(context: Context) {
     /**
      * Biometric unlock preference (defaults to true).
      */
-    fun isBiometricEnabled(): Boolean {
-        return prefs.getBoolean(KEY_BIOMETRIC_ENABLED, true)
+    fun isBiometricEnabled(): Boolean = isAnyBiometricEnabled()
+
+    /**
+     * Returns true if either fingerprint or face authentication is enabled.
+     */
+    fun isAnyBiometricEnabled(): Boolean {
+        return isFingerprintEnabled() || isFaceEnabled()
+    }
+
+    /**
+     * Fingerprint unlock preference (defaults to true if either fingerprint or general biometric was enabled).
+     */
+    fun isFingerprintEnabled(): Boolean {
+        return if (prefs.contains(KEY_FINGERPRINT_ENABLED)) {
+            prefs.getBoolean(KEY_FINGERPRINT_ENABLED, true)
+        } else {
+            prefs.getBoolean(KEY_BIOMETRIC_ENABLED, true)
+        }
+    }
+
+    fun setFingerprintEnabled(enabled: Boolean) {
+        val faceEnabled = isFaceEnabled()
+        prefs.edit()
+            .putBoolean(KEY_FINGERPRINT_ENABLED, enabled)
+            .putBoolean(KEY_BIOMETRIC_ENABLED, enabled || faceEnabled)
+            .apply()
+    }
+
+    /**
+     * Face unlock preference (defaults to true if either face or general biometric was enabled).
+     */
+    fun isFaceEnabled(): Boolean {
+        return if (prefs.contains(KEY_FACE_ENABLED)) {
+            prefs.getBoolean(KEY_FACE_ENABLED, true)
+        } else {
+            prefs.getBoolean(KEY_BIOMETRIC_ENABLED, true)
+        }
+    }
+
+    fun setFaceEnabled(enabled: Boolean) {
+        val fingerprintEnabled = isFingerprintEnabled()
+        prefs.edit()
+            .putBoolean(KEY_FACE_ENABLED, enabled)
+            .putBoolean(KEY_BIOMETRIC_ENABLED, fingerprintEnabled || enabled)
+            .apply()
     }
 
     fun setBiometricEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_BIOMETRIC_ENABLED, enabled).apply()
+        prefs.edit()
+            .putBoolean(KEY_BIOMETRIC_ENABLED, enabled)
+            .putBoolean(KEY_FINGERPRINT_ENABLED, enabled)
+            .putBoolean(KEY_FACE_ENABLED, enabled)
+            .apply()
     }
 
     /**

@@ -66,7 +66,6 @@ import com.example.ui.screens.AppSelectionScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.OnboardingSetupScreen
 import com.example.ui.screens.SettingsScreen
-import com.example.ui.screens.TestLockScreen
 import com.example.ui.theme.AppLockTheme
 import com.example.ui.vault.VaultScreen
 import com.example.util.BiometricHelper
@@ -80,7 +79,6 @@ enum class ScreenState {
     DASHBOARD,
     APP_SELECTION,
     SETTINGS,
-    TEST_LOCK,
     VAULT_AUTH_GATE,
     VAULT
 }
@@ -512,7 +510,6 @@ fun MainAppNavHost(
                     onToggleTheme = onToggleTheme,
                     onNavigateToAppSelection = { navigateTo(ScreenState.APP_SELECTION) },
                     onNavigateToSettings = { navigateTo(ScreenState.SETTINGS) },
-                    onNavigateToTestLock = { navigateTo(ScreenState.TEST_LOCK) },
                     onNavigateToVault = { requestOpenVault(ScreenState.DASHBOARD) },
                     onNavigateToCalculator = {
                         navigateTo(ScreenState.CALCULATOR_GATEWAY, calcFromDashboard = true)
@@ -543,16 +540,6 @@ fun MainAppNavHost(
                     onResetCompleted = { navigateTo(ScreenState.ONBOARDING, calcFromDashboard = false) },
                     onNavigateToApps = { navigateTo(ScreenState.APP_SELECTION) },
                     onNavigateToFiles = { requestOpenVault(ScreenState.SETTINGS) }
-                )
-            }
-
-            ScreenState.TEST_LOCK -> {
-                BackHandler { navigateTo(ScreenState.DASHBOARD) }
-                TestLockScreen(
-                    onNavigateBack = { navigateTo(ScreenState.DASHBOARD) },
-                    onNavigateToApps = { navigateTo(ScreenState.APP_SELECTION) },
-                    onNavigateToFiles = { requestOpenVault(ScreenState.TEST_LOCK) },
-                    onNavigateToSettings = { navigateTo(ScreenState.SETTINGS) }
                 )
             }
 

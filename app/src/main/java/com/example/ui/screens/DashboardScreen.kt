@@ -95,7 +95,6 @@ fun DashboardScreen(
     onToggleTheme: () -> Unit = {},
     onNavigateToAppSelection: () -> Unit,
     onNavigateToSettings: () -> Unit,
-    onNavigateToTestLock: () -> Unit,
     onNavigateToVault: () -> Unit = {},
     onNavigateToCalculator: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -481,50 +480,6 @@ fun DashboardScreen(
                             uncheckedTrackColor = NeoPalette.SurfaceSunken
                         ),
                         modifier = Modifier.testTag("master_protection_switch")
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Lock Screen Simulator Card
-            NeoCard(
-                onClick = onNavigateToTestLock,
-                shape = NeoShapes.MediumCard,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("nav_test_lock")
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("simulator_stat_card"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    NeoIconBadge(
-                        icon = Icons.Default.PlayCircle,
-                        size = 44.dp,
-                        iconSize = 22.dp,
-                        isGlowing = true
-                    )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Lock Screen Simulator",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = NeoPalette.TextPrimary
-                        )
-                        Text(
-                            text = "Preview & test PIN/fingerprint lock screen",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NeoPalette.TextSecondary
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = NeoPalette.TextSecondary
                     )
                 }
             }
